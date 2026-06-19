@@ -121,7 +121,8 @@ export default function (pi: ExtensionAPI) {
     // Ensure session dir exists (for roles/config)
     await ensureSessionConfig(mySession);
 
-    // Update status widget
+    // Update pane title and status widget
+    updatePaneTitle(ctx);
     await refreshStatusWidget(ctx);
 
     const roleLabel = myRoleName ? ` (role: ${myRoleName})` : "";
@@ -645,6 +646,7 @@ export default function (pi: ExtensionAPI) {
       };
       await register(mySession, agentInfo);
 
+      updatePaneTitle(ctx);
       await refreshStatusWidget(ctx);
 
       ctx.ui.notify(
@@ -663,6 +665,15 @@ export default function (pi: ExtensionAPI) {
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "-")
       .replace(/-+/g, "-");
+  }
+
+  function updatePaneTitle(ctx: ExtensionContext): void {
+    const title = myRoleName ? `${myName} (${myRoleName})` : myName ?? "pi";
+    ctx.ui.setTitle(title);
+    // Also set tmux pane title (visible with pane-border-status)
+    if (myPane) {
+      pi.exec("tmux", ["select-pane", "-t", myPane, "-T", title]).catch(() => {});
+    }
   }
 
   async function applyDefaultModel(ctx: ExtensionContext): Promise<void> {
