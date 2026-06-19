@@ -17,7 +17,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { FSWatcher } from "node:fs";
-import { mkdirSync, readdirSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
@@ -326,6 +326,30 @@ export default function (pi: ExtensionAPI) {
       extra += `\n\n## Your Role: ${myRoleName}\n${myRoleInstructions}`;
     }
 
+    // Inject project context (CONTEXT.md)
+    const projectCtx = readContextFile(projectArtifactsDir());
+    if (projectCtx) {
+      extra += `\n\n## Project Context\n${projectCtx}`;
+    }
+
+    // Inject team context (CONTEXT.md)
+    if (myTeam) {
+      const teamCtx = readContextFile(teamArtifactsDir(myTeam));
+      if (teamCtx) {
+        extra += `\n\n## Team "${myTeam}" Context\n${teamCtx}`;
+      }
+    }
+
+    // Inject available roles summary
+    const roles = await readRoles(mySession);
+    const roleEntries = Object.values(roles);
+    if (roleEntries.length > 0) {
+      const roleList = roleEntries
+        .map((r) => `- ${r.name}: ${r.instructions.split("\n")[0]?.slice(0, 120) ?? ""}`)
+        .join("\n");
+      extra += `\n\n## Available Roles\n${roleList}`;
+    }
+
     // Gather online agents
     const onlineAgents = await getOnlineAgents(mySession);
     const sameSessionOthers = onlineAgents.filter((a) => a.id !== myId);
@@ -338,34 +362,34 @@ export default function (pi: ExtensionAPI) {
 
     const hasOthers = sameSessionOthers.length > 0 || crossSessionAgents.length > 0;
 
-    if (!hasOthers && !myRoleInstructions) return;
-
-    extra += `\n\n## Multi-Agent Environment (pmux)`;
-    extra += `\nYou are agent "${myName}" in session "${mySession}" (full address: ${myAddress()}).`;
-    if (myRoleName) extra += `\nRole: ${myRoleName}.`;
-    if (myTeam) extra += `\nTeam: ${myTeam}.`;
-
-    if (sameSessionOthers.length > 0) {
-      const list = sameSessionOthers
-        .map((a) => {
-          const parts = [a.team, a.roleName || a.role, a.name].filter(Boolean);
-          return `  - ${a.name} (${formatAddress(a.session, a.name)}): ${parts.join(":")} [${a.status}]`;
-        })
-        .join("\n");
-      extra += `\n\nSame-session agents (address as "${mySession}/<name>" or just "<name>"):\n${list}`;
-    }
-
-    if (crossSessionAgents.length > 0) {
-      const list = crossSessionAgents
-        .map((a) => {
-          const parts = [a.team, a.roleName || a.role, a.name].filter(Boolean);
-          return `  - ${formatAddress(a.session, a.name)}: ${parts.join(":")} [${a.status}]`;
-        })
-        .join("\n");
-      extra += `\nCross-session agents (must use full address "session/name"):\n${list}`;
-    }
+    if (!hasOthers && !extra) return;
 
     if (hasOthers) {
+      extra += `\n\n## Multi-Agent Environment (pmux)`;
+      extra += `\nYou are agent "${myName}" in session "${mySession}" (full address: ${myAddress()}).`;
+      if (myRoleName) extra += `\nRole: ${myRoleName}.`;
+      if (myTeam) extra += `\nTeam: ${myTeam}.`;
+
+      if (sameSessionOthers.length > 0) {
+        const list = sameSessionOthers
+          .map((a) => {
+            const parts = [a.team, a.roleName || a.role, a.name].filter(Boolean);
+            return `  - ${a.name} (${formatAddress(a.session, a.name)}): ${parts.join(":")} [${a.status}]`;
+          })
+          .join("\n");
+        extra += `\n\nSame-session agents (address as "${mySession}/<name>" or just "<name>"):\n${list}`;
+      }
+
+      if (crossSessionAgents.length > 0) {
+        const list = crossSessionAgents
+          .map((a) => {
+            const parts = [a.team, a.roleName || a.role, a.name].filter(Boolean);
+            return `  - ${formatAddress(a.session, a.name)}: ${parts.join(":")} [${a.status}]`;
+          })
+          .join("\n");
+        extra += `\nCross-session agents (must use full address "session/name"):\n${list}`;
+      }
+
       extra += `\n
 ### Addressing
 - Same-session agents: use just the name (e.g., "backend") or full address ("${mySession}/backend")
@@ -383,7 +407,7 @@ export default function (pi: ExtensionAPI) {
     if (myId) {
       extra += `\n\n### Shared Artifacts\nRead and write shared documents using the standard read/write/edit tools.`;
       extra += `\n- Project (all agents): ${projectArtifactsDir()}`;
-      if (myTeam) extra += `\n- Team \"${myTeam}\" (team members): ${teamArtifactsDir(myTeam)}`;
+      if (myTeam) extra += `\n- Team "${myTeam}" (team members): ${teamArtifactsDir(myTeam)}`;
       extra += `\n- Private (you only): ${agentArtifactsDir(myId)}`;
     }
 
@@ -892,6 +916,23 @@ export default function (pi: ExtensionAPI) {
       return readdirSync(dir).filter((f) => !f.startsWith("."));
     } catch {
       return [];
+    }
+  }
+
+  const MAX_CONTEXT_SIZE = 4096;
+
+  /** Read a CONTEXT.md file if it exists, with size guard. */
+  function readContextFile(dir: string): string | null {
+    const path = join(dir, "CONTEXT.md");
+    if (!existsSync(path)) return null;
+    try {
+      let content = readFileSync(path, "utf8").trim();
+      if (content.length > MAX_CONTEXT_SIZE) {
+        content = content.slice(0, MAX_CONTEXT_SIZE) + `\n\n[truncated — see full file at ${path}]`;
+      }
+      return content || null;
+    } catch {
+      return null;
     }
   }
 
