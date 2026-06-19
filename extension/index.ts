@@ -17,6 +17,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { FSWatcher } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import {
   type AgentInfo,
   type RoleDefinition,
@@ -89,8 +92,9 @@ export default function (pi: ExtensionAPI) {
     // Mark online
     await goOnline(mySession, myId, process.pid, myPane);
 
-    // Ensure inbox exists
+    // Ensure inbox and artifact directories exist
     ensureInbox(mySession, myId);
+    ensureArtifactDirs();
 
     // Start heartbeat
     if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -375,6 +379,14 @@ export default function (pi: ExtensionAPI) {
 - Reply using pmux_send with the sender's address.`;
     }
 
+    // Artifact paths — always include when agent has identity
+    if (myId) {
+      extra += `\n\n### Shared Artifacts\nRead and write shared documents using the standard read/write/edit tools.`;
+      extra += `\n- Project (all agents): ${projectArtifactsDir()}`;
+      if (myTeam) extra += `\n- Team \"${myTeam}\" (team members): ${teamArtifactsDir(myTeam)}`;
+      extra += `\n- Private (you only): ${agentArtifactsDir(myId)}`;
+    }
+
     return { systemPrompt: event.systemPrompt + extra };
   });
 
@@ -613,6 +625,51 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ─ pmux_artifacts ────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "pmux_artifacts",
+    label: "List Artifacts",
+    description:
+      "List shared documents at project, team, and agent levels. " +
+      "Use read/write/edit tools to work with the files directly.",
+    promptSnippet: "List shared artifacts at project, team, or agent level",
+    parameters: Type.Object({}),
+
+    async execute() {
+      if (!mySession || !myId) {
+        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+      }
+
+      const sections: string[] = [];
+
+      // Project level
+      const projDir = projectArtifactsDir();
+      const projFiles = listFiles(projDir);
+      sections.push(`Project (${projDir}):\n` +
+        (projFiles.length > 0 ? projFiles.map((f) => `  - ${f}`).join("\n") : "  (empty)"));
+
+      // Team level
+      if (myTeam) {
+        const tDir = teamArtifactsDir(myTeam);
+        const tFiles = listFiles(tDir);
+        sections.push(`Team \"${myTeam}\" (${tDir}):\n` +
+          (tFiles.length > 0 ? tFiles.map((f) => `  - ${f}`).join("\n") : "  (empty)"));
+      }
+
+      // Agent level
+      const aDir = agentArtifactsDir(myId);
+      const aFiles = listFiles(aDir);
+      sections.push(`Private (${aDir}):\n` +
+        (aFiles.length > 0 ? aFiles.map((f) => `  - ${f}`).join("\n") : "  (empty)"));
+
+      return {
+        content: [{ type: "text", text: sections.join("\n\n") }],
+        details: { project: projFiles, team: myTeam ? listFiles(teamArtifactsDir(myTeam)) : [], agent: aFiles },
+      };
+    },
+  });
+
   // ── Commands ─────────────────────────────────────────────────
 
   // ─ /pmux — status ────────────────────────────────────────────
@@ -806,6 +863,37 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── Helpers ──────────────────────────────────────────────────
+
+  // ── Artifacts ────────────────────────────────────────────────
+
+  const PMUX_BASE = join(homedir(), ".pmux", "sessions");
+
+  function projectArtifactsDir(): string {
+    return join(PMUX_BASE, mySession!, "artifacts", "project");
+  }
+
+  function teamArtifactsDir(team: string): string {
+    return join(PMUX_BASE, mySession!, "artifacts", "teams", team);
+  }
+
+  function agentArtifactsDir(agentId: string): string {
+    return join(PMUX_BASE, mySession!, "artifacts", "agents", agentId);
+  }
+
+  function ensureArtifactDirs(): void {
+    if (!mySession || !myId) return;
+    mkdirSync(projectArtifactsDir(), { recursive: true });
+    if (myTeam) mkdirSync(teamArtifactsDir(myTeam), { recursive: true });
+    mkdirSync(agentArtifactsDir(myId), { recursive: true });
+  }
+
+  function listFiles(dir: string): string[] {
+    try {
+      return readdirSync(dir).filter((f) => !f.startsWith("."));
+    } catch {
+      return [];
+    }
+  }
 
   async function applyDefaultModel(ctx: ExtensionContext): Promise<void> {
     const modelStr = process.env.PMUX_MODEL;
