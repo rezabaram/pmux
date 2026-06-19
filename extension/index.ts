@@ -5,9 +5,8 @@
  * Communication uses file-based inboxes.
  *
  * Agent lifecycle:
- *   /pmux_register  — create a new agent (UUID, name, team, role)
- *   /pmux_login     — resume an existing offline agent
- *   session shutdown — agent goes offline (persists for later login)
+ *   /pmux_join      — join or create a project, pick or create an agent
+ *   session shutdown — agent goes offline (persists for later)
  *
  * Tools: pmux_role, pmux_list, pmux_send, pmux_broadcast,
  *         pmux_reserve, pmux_task, pmux_journal
@@ -195,31 +194,21 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
 
-    // Determine session name
-    mySession = process.env.PMUX_SESSION || deriveAgentName(ctx.cwd);
-
-    // Ensure session directory exists
-    const config = await readSessionConfig(mySession);
-    if (!config.createdAt) {
-      config.createdAt = new Date().toISOString();
-      if (process.env.PMUX_MODEL && !config.model) {
-        config.model = process.env.PMUX_MODEL;
-      }
-      await writeSessionConfig(mySession, config);
-    }
-
-    // Try to recover UUID from pi session entries (reload recovery)
+    // Reload recovery: check pi session entries for stored agent
     let recoveredId: string | undefined;
+    let recoveredSession: string | undefined;
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "pmux-agent") {
-        recoveredId = (entry.data as { id: string }).id;
+        const data = entry.data as { id: string; session: string };
+        recoveredId = data.id;
+        recoveredSession = data.session;
       }
     }
 
-    if (recoveredId) {
-      // Reload recovery — resume agent
-      const agent = await findById(mySession, recoveredId);
+    if (recoveredId && recoveredSession) {
+      const agent = await findById(recoveredSession, recoveredId);
       if (agent) {
+        mySession = recoveredSession;
         myId = agent.id;
         myName = agent.name;
         myRole = agent.role;
@@ -228,68 +217,11 @@ export default function (pi: ExtensionAPI) {
           await loadRoleInstructions(mySession, agent.roleName);
         }
         await startAgent(ctx);
-        ctx.ui.notify(`pmux: resumed as "${myName}" in session "${mySession}"`, "info");
         return;
       }
     }
 
-    // Auto-register from env vars (config-based flow)
-    if (process.env.PMUX_AGENT) {
-      const existingName = process.env.PMUX_AGENT;
-      const existing = await findByName(mySession, existingName);
-
-      if (existing && existing.status === "offline") {
-        // Login as existing agent
-        myId = existing.id;
-        myName = existing.name;
-        myRole = existing.role;
-        myTeam = existing.team || process.env.PMUX_TEAM;
-        if (existing.roleName) {
-          await loadRoleInstructions(mySession, existing.roleName);
-        }
-      } else if (!existing) {
-        // Create new agent
-        myId = newAgentId();
-        myName = existingName;
-        myRole = process.env.PMUX_ROLE || `Agent ${existingName}`;
-        myTeam = process.env.PMUX_TEAM;
-
-        const envRoleName = process.env.PMUX_ROLE_NAME;
-        if (envRoleName) {
-          await loadRoleInstructions(mySession, envRoleName);
-        }
-
-        const agent: AgentInfo = {
-          id: myId,
-          name: myName,
-          session: mySession,
-          team: myTeam,
-          role: myRole,
-          roleName: myRoleName,
-          cwd: ctx.cwd,
-          pid: process.pid,
-          status: "online",
-          registeredAt: new Date().toISOString(),
-          lastHeartbeat: new Date().toISOString(),
-        };
-        await registerAgent(mySession, agent);
-      }
-
-      if (myId) {
-        await startAgent(ctx);
-        ctx.ui.notify(`pmux: registered as "${myName}" in session "${mySession}"`, "info");
-        return;
-      }
-    }
-
-    // Apply default model
-    await applyDefaultModel(ctx);
-
-    // No agent identity yet — wait for /pmux_register or /pmux_login
-    ctx.ui.notify(
-      `pmux: session "${mySession}". Use /pmux_register or /pmux_login to join.`,
-      "info"
-    );
+    // Otherwise: silent. Use /pmux_join to get started.
   });
 
   pi.on("session_shutdown", async (event) => {
@@ -475,10 +407,10 @@ export default function (pi: ExtensionAPI) {
     description:
       "Add, list, or remove role definitions for the current pmux session. " +
       "Roles define a name and instructions that shape an agent's behavior. " +
-      "Agents register with a role using /pmux_register.",
+      "Agents join projects with /pmux_join.",
     promptSnippet: "Add, list, or remove pmux role definitions",
     promptGuidelines: [
-      "Use pmux_role to define roles before agents register with /pmux_register.",
+      "Use pmux_role to define roles before agents join with /pmux_join.",
       "Each pmux_role has a name and instructions that guide the agent's behavior.",
     ],
     parameters: Type.Object({
@@ -503,7 +435,7 @@ export default function (pi: ExtensionAPI) {
           if (!params.instructions) throw new Error("Instructions are required for add.");
           await addRole(mySession, { name: params.name, instructions: params.instructions });
           return {
-            content: [{ type: "text", text: `Role "${params.name}" added. Agents can register with: /pmux_register` }],
+            content: [{ type: "text", text: `Role "${params.name}" added. Agents can join with: /pmux_join` }],
             details: { role: { name: params.name, instructions: params.instructions } },
           };
         }
@@ -610,7 +542,7 @@ export default function (pi: ExtensionAPI) {
 
     async execute(_id, params) {
       if (!mySession || !myId || !myName) {
-        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+        throw new Error("Not registered. Use /pmux_join first.");
       }
 
       const target = await resolveAgent(params.to, mySession);
@@ -661,7 +593,7 @@ export default function (pi: ExtensionAPI) {
 
     async execute(_id, params) {
       if (!mySession || !myId || !myName) {
-        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+        throw new Error("Not registered. Use /pmux_join first.");
       }
 
       let agents: AgentInfo[];
@@ -713,7 +645,7 @@ export default function (pi: ExtensionAPI) {
 
     async execute() {
       if (!mySession || !myId) {
-        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+        throw new Error("Not registered. Use /pmux_join first.");
       }
 
       const sections: string[] = [];
@@ -775,7 +707,7 @@ export default function (pi: ExtensionAPI) {
 
       switch (params.action) {
         case "claim": {
-          if (!myId || !myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.paths?.length) throw new Error("Paths are required for claim.");
 
           const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
@@ -794,7 +726,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         case "release": {
-          if (!myId) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myId) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.paths?.length) throw new Error("Paths are required for release.");
 
           const released = await release(mySession, params.paths, myId);
@@ -892,7 +824,7 @@ export default function (pi: ExtensionAPI) {
       switch (params.action) {
         // ── add ──────────────────────────────────────────────
         case "add": {
-          if (!myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myName) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.title) throw new Error("Title is required for add.");
 
           const now = new Date().toISOString();
@@ -970,7 +902,7 @@ export default function (pi: ExtensionAPI) {
 
         // ── assign ───────────────────────────────────────────
         case "assign": {
-          if (!myId || !myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.id) throw new Error("Task ID is required for assign.");
           if (!params.to) throw new Error("Target agent name is required for assign.");
 
@@ -1028,7 +960,7 @@ export default function (pi: ExtensionAPI) {
 
         // ── pick ─────────────────────────────────────────────
         case "pick": {
-          if (!myId || !myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux_join first.");
 
           const tasks = await readBacklog(mySession);
           let task: Task | undefined;
@@ -1109,7 +1041,7 @@ export default function (pi: ExtensionAPI) {
 
         // ── done ─────────────────────────────────────────────
         case "done": {
-          if (!myId) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myId) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.id) throw new Error("Task ID is required for done.");
 
           const tasks = await readBacklog(mySession);
@@ -1147,7 +1079,7 @@ export default function (pi: ExtensionAPI) {
 
         // ── drop ─────────────────────────────────────────────
         case "drop": {
-          if (!myId) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myId) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.id) throw new Error("Task ID is required for drop.");
 
           const tasks = await readBacklog(mySession);
@@ -1186,7 +1118,7 @@ export default function (pi: ExtensionAPI) {
 
         // ── block ────────────────────────────────────────────
         case "block": {
-          if (!myId) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myId) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.id) throw new Error("Task ID is required for block.");
           if (!params.reason) throw new Error("Reason is required for block.");
 
@@ -1249,7 +1181,7 @@ export default function (pi: ExtensionAPI) {
 
       switch (params.action) {
         case "add": {
-          if (!myId || !myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.type) throw new Error("Entry type is required for add (decision, learning, or progress).");
           if (!params.content) throw new Error("Content is required for add.");
 
@@ -1341,154 +1273,206 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ /pmux_register — create new agent ─────────────────────────
+  // ─ /pmux_join — join or create a project ─────────────────────
 
-  pi.registerCommand("pmux_register", {
-    description: "Create a new agent with name, team, and role (interactive)",
-    handler: async (_args, ctx) => {
-      if (!mySession) {
-        ctx.ui.notify("pmux session not active", "warning");
+  pi.registerCommand("pmux_join", {
+    description: "Join or create a project (interactive)",
+    handler: async (args, ctx) => {
+      // 1. Select or create project
+      let project = args.trim();
+
+      if (!project) {
+        const sessionsDir = join(homedir(), ".pmux", "sessions");
+        let existing: string[] = [];
+        try {
+          existing = readdirSync(sessionsDir, { withFileTypes: true })
+            .filter((d) => d.isDirectory())
+            .map((d) => d.name);
+        } catch {}
+
+        const CREATE_PROJECT = "+ Create new project";
+        if (existing.length > 0) {
+          const choice = await ctx.ui.select("Join project:", [...existing, CREATE_PROJECT]);
+          if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
+          project = choice === CREATE_PROJECT
+            ? (await ctx.ui.input("Project name:")) ?? ""
+            : choice;
+        } else {
+          project = (await ctx.ui.input("Project name:")) ?? "";
+        }
+        if (!project) { ctx.ui.notify("Cancelled.", "info"); return; }
+      }
+
+      // If already in this project with an identity, just notify
+      if (mySession === project && myId) {
+        ctx.ui.notify(`Already in project "${project}" as ${myName}.`, "info");
         return;
       }
 
-      // 1. Check roles exist
-      const roles = await readRoles(mySession);
-      const roleNames = Object.keys(roles);
-      if (roleNames.length === 0) {
-        ctx.ui.notify(
-          "No roles defined yet.\n\nAsk the LLM to create roles first, e.g.:\n" +
-            '> Create a pmux role called "developer" with instructions to write clean code.',
-          "warning"
-        );
-        return;
-      }
-
-      // 2. Agent name
-      const name = await ctx.ui.input("Agent name:", myName);
-      if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-      // 3. Team
-      let team: string | undefined;
-      const registry = await readRegistry(mySession);
-      const existingTeams = [...new Set(
-        Object.values(registry).map((a) => a.team).filter((t): t is string => !!t)
-      )];
-
-      if (existingTeams.length > 0) {
-        const CREATE_NEW = "+ Create new team";
-        const choice = await ctx.ui.select("Team:", [...existingTeams, CREATE_NEW]);
-        if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
-        team = choice === CREATE_NEW
-          ? await ctx.ui.input("New team name:")
-          : choice;
-        if (!team) { ctx.ui.notify("Cancelled.", "info"); return; }
-      } else {
-        team = await ctx.ui.input("Team name:", myTeam);
-        if (!team) { ctx.ui.notify("Cancelled.", "info"); return; }
-      }
-
-      // 4. Role
-      const roleName = await ctx.ui.select("Choose a role:", roleNames);
-      if (!roleName) { ctx.ui.notify("Cancelled.", "info"); return; }
-      const role = roles[roleName]!;
-
-      // 5. If replacing an existing identity, go offline first
-      if (myId && mySession) {
+      // If switching from another project, go offline there first
+      if (myId && mySession && mySession !== project) {
         await goOffline(mySession, myId);
+        stopAgent();
       }
 
-      // 6. Create new agent
-      myId = newAgentId();
-      myName = name;
-      myTeam = team;
-      myRoleName = role.name;
-      myRole = role.name;
-      myRoleInstructions = role.instructions;
+      mySession = project;
 
-      const agent: AgentInfo = {
-        id: myId,
-        name: myName,
-        session: mySession,
-        team: myTeam,
-        role: role.name,
-        roleName: role.name,
-        cwd: ctx.cwd,
-        pid: process.pid,
-        status: "online",
-        registeredAt: new Date().toISOString(),
-        lastHeartbeat: new Date().toISOString(),
-      };
-      await registerAgent(mySession, agent);
+      // Ensure project directory + config exist
+      const config = await readSessionConfig(mySession);
+      if (!config.createdAt) {
+        config.createdAt = new Date().toISOString();
+        await writeSessionConfig(mySession, config);
+      }
 
-      await startAgent(ctx);
+      // 2. Select existing agent or create new
+      const registry = await readRegistry(mySession);
+      const allAgents = Object.values(registry);
+      const offlineAgents = allAgents.filter((a) => a.status === "offline");
 
-      ctx.ui.notify(
-        `Registered as "${myName}" in team "${team}" with role "${role.name}".`,
-        "info"
-      );
+      const CREATE_AGENT = "+ Create new agent";
+      let agentChoice = CREATE_AGENT;
+
+      if (offlineAgents.length > 0) {
+        const options = offlineAgents.map((a) => {
+          const parts = [a.team, a.roleName, a.name].filter(Boolean).join(":");
+          return `${a.name} — ${parts}`;
+        });
+        const choice = await ctx.ui.select("Join as:", [...options, CREATE_AGENT]);
+        if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
+        agentChoice = choice;
+      }
+
+      if (agentChoice === CREATE_AGENT) {
+        // ─ Create new agent ─────────────────────────────────
+        const name = await ctx.ui.input("Agent name:");
+        if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+        // Team
+        let team: string | undefined;
+        const existingTeams = [...new Set(
+          allAgents.map((a) => a.team).filter((t): t is string => !!t)
+        )];
+
+        if (existingTeams.length > 0) {
+          const CREATE_TEAM = "+ Create new team";
+          const teamChoice = await ctx.ui.select("Team:", [...existingTeams, CREATE_TEAM]);
+          if (!teamChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
+          team = teamChoice === CREATE_TEAM
+            ? (await ctx.ui.input("New team name:")) ?? undefined
+            : teamChoice;
+          if (!team) { ctx.ui.notify("Cancelled.", "info"); return; }
+        } else {
+          team = (await ctx.ui.input("Team name:")) ?? undefined;
+          if (!team) { ctx.ui.notify("Cancelled.", "info"); return; }
+        }
+
+        // Role (optional — may not have roles defined yet)
+        const roles = await readRoles(mySession);
+        const roleNames = Object.keys(roles);
+        let roleName: string | undefined;
+        let roleInstructions: string | undefined;
+
+        if (roleNames.length > 0) {
+          roleName = (await ctx.ui.select("Role:", roleNames)) ?? undefined;
+          if (roleName) {
+            roleInstructions = roles[roleName]!.instructions;
+          }
+        }
+
+        // Create agent
+        myId = newAgentId();
+        myName = name;
+        myTeam = team;
+        myRoleName = roleName;
+        myRole = roleName ?? `Agent ${name}`;
+        myRoleInstructions = roleInstructions;
+
+        const agent: AgentInfo = {
+          id: myId,
+          name: myName,
+          session: mySession,
+          team: myTeam,
+          role: myRole,
+          roleName: myRoleName,
+          cwd: ctx.cwd,
+          pid: process.pid,
+          status: "online",
+          registeredAt: new Date().toISOString(),
+          lastHeartbeat: new Date().toISOString(),
+        };
+        await registerAgent(mySession, agent);
+        await startAgent(ctx);
+
+        const roleNote = roleName ? ` with role "${roleName}"` : "";
+        ctx.ui.notify(
+          `Joined project "${project}" as "${name}" (team: ${team})${roleNote}.`,
+          "info"
+        );
+
+      } else {
+        // ─ Resume existing agent ─────────────────────────────
+        const selectedName = agentChoice.split(" — ")[0]!;
+        const agent = offlineAgents.find((a) => a.name === selectedName);
+        if (!agent) { ctx.ui.notify("Agent not found.", "error"); return; }
+
+        myId = agent.id;
+        myName = agent.name;
+        myRole = agent.role;
+        myTeam = agent.team;
+        myRoleName = agent.roleName;
+        if (agent.roleName) {
+          await loadRoleInstructions(mySession, agent.roleName);
+        }
+
+        await updateAgent(mySession, myId, { cwd: ctx.cwd });
+        await startAgent(ctx);
+
+        const pending = getRecoverableMessages(mySession, myId);
+        const pendingNote = pending.length > 0 ? ` ${pending.length} message(s) waiting.` : "";
+        ctx.ui.notify(
+          `Joined project "${project}" as "${myName}" (${myRoleName || "no role"}).${pendingNote}`,
+          "info"
+        );
+      }
     },
   });
 
-  // ─ /pmux_login — resume existing agent ───────────────────────
+  // ─ /pmux_leave — leave current project ───────────────────
 
-  pi.registerCommand("pmux_login", {
-    description: "Log in as an existing offline agent",
+  pi.registerCommand("pmux_leave", {
+    description: "Leave the current project and return to solo Pi",
     handler: async (_args, ctx) => {
-      if (!mySession) {
-        ctx.ui.notify("pmux session not active", "warning");
+      if (!mySession || !myId) {
+        ctx.ui.notify("Not in any project.", "info");
         return;
       }
 
-      const offline = await getOfflineAgents(mySession);
-      if (offline.length === 0) {
-        ctx.ui.notify(
-          "No offline agents to log in as.\nUse /pmux_register to create a new agent.",
-          "info"
-        );
-        return;
-      }
+      const projectName = mySession;
+      const agentName = myName;
 
-      // Build selection list
-      const options = offline.map((a) => {
-        const parts = [a.team, a.roleName, a.name].filter(Boolean).join(":");
-        return `${a.name} — ${parts}`;
-      });
+      // Mark offline in project registry
+      await goOffline(mySession, myId);
 
-      const choice = await ctx.ui.select("Log in as:", options);
-      if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
+      // Stop heartbeat and inbox watcher
+      stopAgent();
 
-      // Find the selected agent
-      const selectedName = choice.split(" — ")[0]!;
-      const agent = offline.find((a) => a.name === selectedName);
-      if (!agent) { ctx.ui.notify("Agent not found.", "error"); return; }
+      // Clear session entry so reload doesn't auto-rejoin
+      pi.appendEntry("pmux-agent", { id: null, session: null });
 
-      // If replacing an existing identity, go offline first
-      if (myId && mySession && myId !== agent.id) {
-        await goOffline(mySession, myId);
-      }
+      // Clear all state
+      myId = undefined;
+      myName = undefined;
+      myRole = undefined;
+      myRoleName = undefined;
+      myRoleInstructions = undefined;
+      myTeam = undefined;
+      mySession = undefined;
 
-      // Resume as this agent
-      myId = agent.id;
-      myName = agent.name;
-      myRole = agent.role;
-      myTeam = agent.team;
-      myRoleName = agent.roleName;
-      if (agent.roleName) {
-        await loadRoleInstructions(mySession, agent.roleName);
-      }
+      // Clear status widget and title
+      ctx.ui.setStatus("pmux", "");
+      ctx.ui.setTitle("pi");
 
-      // Go online
-      await updateAgent(mySession, myId, { cwd: ctx.cwd });
-      await startAgent(ctx);
-
-      // Check for pending messages
-      const pending = getRecoverableMessages(mySession, myId);
-      const pendingNote = pending.length > 0 ? ` ${pending.length} message(s) waiting.` : "";
-
-      ctx.ui.notify(
-        `Logged in as "${myName}" (${myRoleName || "no role"}).${pendingNote}`,
-        "info"
-      );
+      ctx.ui.notify(`Left project \"${projectName}\". Back to solo Pi.`, "info");
     },
   });
 
