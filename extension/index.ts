@@ -57,6 +57,12 @@ export default function (pi: ExtensionAPI) {
     return formatAddress(mySession!, myName!);
   }
 
+  /** Message prefix: [pmux:session/name (role)] or [pmux:session/name] */
+  function myPrefix(): string {
+    const addr = myAddress();
+    return myRoleName ? `[pmux:${addr} (${myRoleName})]` : `[pmux:${addr}]`;
+  }
+
   // ── Lifecycle ────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
@@ -214,7 +220,7 @@ export default function (pi: ExtensionAPI) {
 ### Communication
 - Use pmux_send to delegate tasks or ask questions to other agents.
 - Use pmux_list to refresh the list of available agents (set allSessions=true for cross-session).
-- Messages from other agents appear as "[pmux:session/agent] message".
+- Messages from other agents appear as "[pmux:session/agent (role)] message".
 - When you receive a [pmux:...] message, treat it as a request from a teammate and respond helpfully.
 - Reply using pmux_send with the sender's address.`;
     }
@@ -449,7 +455,7 @@ export default function (pi: ExtensionAPI) {
         throw new Error("Cannot send a message to yourself.");
       }
 
-      const formatted = `[pmux:${myAddress()}] ${params.message}`;
+      const formatted = `${myPrefix()} ${params.message}`;
       await sendKeys(target.pane, formatted);
 
       return {
@@ -510,7 +516,7 @@ export default function (pi: ExtensionAPI) {
         throw new Error("No other agents online to broadcast to.");
       }
 
-      const formatted = `[pmux:${myAddress()}] ${params.message}`;
+      const formatted = `${myPrefix()} ${params.message}`;
       const errors: string[] = [];
 
       for (const agent of others) {
