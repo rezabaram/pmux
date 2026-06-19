@@ -10,7 +10,8 @@
  *   /pmux_login     — resume an existing offline agent
  *   session shutdown — agent goes offline (persists for later login)
  *
- * Tools: pmux_role, pmux_list, pmux_send, pmux_broadcast
+ * Tools: pmux_role, pmux_list, pmux_send, pmux_broadcast,
+ *         pmux_reserve, pmux_release, pmux_reservations
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -56,6 +57,13 @@ import {
   newMessageId,
   type InboxMessage,
 } from "./messaging";
+import {
+  reserve,
+  release,
+  getReservations,
+  checkConflict,
+  clearStaleReservations,
+} from "./reservations";
 import { detectTmux, setPaneTitle, setWindowName } from "./tmux";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -308,10 +316,46 @@ export default function (pi: ExtensionAPI) {
       await updateHeartbeat(mySession, myId).catch(() => {});
       // Clean up .delivered files — messages confirmed processed
       confirmDelivered(mySession, myId);
+      // Clean up stale reservations (held by offline agents)
+      const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
+      const onlineIds = online.map((a) => a.id);
+      await clearStaleReservations(mySession, onlineIds).catch(() => {});
     }
     if (currentCtx) {
       await refreshStatusWidget(currentCtx);
     }
+  });
+
+  // ── File Reservation Warnings ────────────────────────────────
+
+  pi.on("tool_result", async (event) => {
+    if (!mySession || !myId) return;
+    if (event.toolName !== "write" && event.toolName !== "edit") return;
+
+    const filePath = (event.input as Record<string, unknown>).path as string | undefined;
+    if (!filePath) return;
+
+    // Get online agent IDs for stale detection
+    const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
+    const onlineIds = online.map((a) => a.id);
+
+    const conflict = await checkConflict(mySession, filePath, myId, onlineIds);
+    if (!conflict) return;
+
+    const { reservedPath, reservation, stale } = conflict;
+    const reasonStr = reservation.reason ? ` (${reservation.reason})` : "";
+    const staleNote = stale ? " [agent offline — stale reservation]" : "";
+    const warning =
+      `⚠️ ${filePath} is reserved by ${reservation.agent}${reasonStr}${staleNote}. ` +
+      `Consider coordinating via pmux_send('${reservation.agent}', ...).`;
+
+    // Prepend warning to result content
+    return {
+      content: [
+        { type: "text" as const, text: warning },
+        ...event.content,
+      ],
+    };
   });
 
   // ── System Prompt Injection ──────────────────────────────────
@@ -694,6 +738,142 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ─ pmux_reserve ──────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "pmux_reserve",
+    label: "Reserve Files",
+    description:
+      "Reserve file paths or directory prefixes to prevent conflicts with other agents. " +
+      "Trailing slash = directory prefix (e.g. 'src/auth/'), no slash = exact file. " +
+      "Rejects if another online agent already has an overlapping reservation.",
+    promptSnippet: "Reserve files/directories to prevent conflicts with other agents",
+    promptGuidelines: [
+      "Use pmux_reserve before editing files that other agents might also be working on.",
+      "Use trailing slash for directories (e.g., 'src/auth/') and no slash for exact files.",
+      "Release reservations with pmux_release when done.",
+    ],
+    parameters: Type.Object({
+      paths: Type.Array(Type.String({ description: "Paths to reserve (trailing slash = directory prefix)" })),
+      reason: Type.Optional(
+        Type.String({ description: "Why you're reserving these paths (shown to other agents)" })
+      ),
+    }),
+
+    async execute(_id, params) {
+      if (!mySession || !myId || !myName) {
+        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+      }
+
+      // Get online agent IDs for stale reservation handling
+      const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
+      const onlineIds = online.map((a) => a.id);
+
+      const reserved = await reserve(
+        mySession,
+        params.paths,
+        myId,
+        myName,
+        params.reason,
+        onlineIds
+      );
+
+      const reasonNote = params.reason ? ` (${params.reason})` : "";
+      return {
+        content: [{
+          type: "text",
+          text: `Reserved ${reserved.length} path(s)${reasonNote}:\n${reserved.map((p) => `  ✓ ${p}`).join("\n")}`,
+        }],
+        details: { reserved, reason: params.reason },
+      };
+    },
+  });
+
+  // ─ pmux_release ──────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "pmux_release",
+    label: "Release Files",
+    description:
+      "Release file reservations you previously made. " +
+      "Only releases reservations held by you.",
+    promptSnippet: "Release your file/directory reservations",
+    parameters: Type.Object({
+      paths: Type.Array(Type.String({ description: "Paths to release" })),
+    }),
+
+    async execute(_id, params) {
+      if (!mySession || !myId) {
+        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+      }
+
+      const released = await release(mySession, params.paths, myId);
+
+      if (released.length === 0) {
+        return {
+          content: [{ type: "text", text: "No matching reservations found to release." }],
+          details: { released: [] },
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `Released ${released.length} reservation(s):\n${released.map((p) => `  ✓ ${p}`).join("\n")}`,
+        }],
+        details: { released },
+      };
+    },
+  });
+
+  // ─ pmux_reservations ─────────────────────────────────────────
+
+  pi.registerTool({
+    name: "pmux_reservations",
+    label: "List Reservations",
+    description:
+      "List all current file reservations with agent name, reason, and duration.",
+    promptSnippet: "List all file/directory reservations across agents",
+    parameters: Type.Object({}),
+
+    async execute() {
+      if (!mySession) {
+        throw new Error("pmux session not active");
+      }
+
+      const reservations = await getReservations(mySession);
+      const entries = Object.entries(reservations);
+
+      if (entries.length === 0) {
+        return {
+          content: [{ type: "text", text: "No active reservations." }],
+          details: { reservations: {} },
+        };
+      }
+
+      // Get online agents for stale detection
+      const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
+      const onlineIds = new Set(online.map((a) => a.id));
+
+      const now = Date.now();
+      const lines = entries.map(([path, res]) => {
+        const elapsed = now - new Date(res.since).getTime();
+        const duration = formatDuration(elapsed);
+        const reasonStr = res.reason ? ` — ${res.reason}` : "";
+        const stale = !onlineIds.has(res.agentId);
+        const staleStr = stale ? " [stale — agent offline]" : "";
+        const isMe = res.agentId === myId;
+        const marker = isMe ? " (you)" : "";
+        return `  ${path}  →  ${res.agent}${marker}${reasonStr} (${duration})${staleStr}`;
+      });
+
+      return {
+        content: [{ type: "text", text: `Active reservations:\n${lines.join("\n")}` }],
+        details: { reservations },
+      };
+    },
+  });
+
   // ── Commands ─────────────────────────────────────────────────
 
   // ─ /pmux — status ────────────────────────────────────────────
@@ -887,6 +1067,20 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── Helpers ──────────────────────────────────────────────────
+
+  /** Format a duration in milliseconds to a human-readable string. */
+  function formatDuration(ms: number): string {
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (hours < 24) return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+  }
 
   // ── Artifacts ────────────────────────────────────────────────
 
