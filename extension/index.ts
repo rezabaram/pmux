@@ -11,7 +11,7 @@
  *   session shutdown — agent goes offline (persists for later login)
  *
  * Tools: pmux_role, pmux_list, pmux_send, pmux_broadcast,
- *         pmux_reserve, pmux_task
+ *         pmux_reserve, pmux_task, pmux_journal
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -71,6 +71,12 @@ import {
   addTask,
   nextTaskId,
 } from "./backlog";
+import {
+  appendEntry as addJournalEntry,
+  readEntries as readJournalEntries,
+  getRecentEntries,
+  formatEntry as formatJournalEntry,
+} from "./journal";
 import { detectTmux, setPaneTitle, setWindowName } from "./tmux";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -389,6 +395,13 @@ export default function (pi: ExtensionAPI) {
       if (teamCtx) {
         extra += `\n\n## Team "${myTeam}" Context\n${teamCtx}`;
       }
+    }
+
+    // Inject recent journal entries (sliding window)
+    const recentJournal = getRecentEntries(mySession);
+    if (recentJournal.length > 0) {
+      const journalLines = recentJournal.map((e) => `- ${formatJournalEntry(e)}`);
+      extra += `\n\n## Recent Journal\n${journalLines.join("\n")}`;
     }
 
     // Inject available roles summary
@@ -1203,6 +1216,94 @@ export default function (pi: ExtensionAPI) {
           return {
             content: [{ type: "text", text: `⚠️ ${task.id} blocked: ${params.reason}` }],
             details: { task },
+          };
+        }
+
+        default:
+          throw new Error(`Unknown action: ${params.action}`);
+      }
+    },
+  });
+
+  // ─ pmux_journal ────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "pmux_journal",
+    label: "Journal",
+    description:
+      "Append-only journal for recording decisions, learnings, and progress. " +
+      "Actions: add (record an entry), list (show recent entries). " +
+      "Recent entries are automatically injected into the system prompt.",
+    promptSnippet: "Record and review decisions, learnings, and progress",
+    promptGuidelines: [
+      "Use pmux_journal to record important decisions, things you've learned, and progress updates.",
+      "Journal entries are shared across all agents and persist across sessions.",
+      "Recent entries are automatically included in the system prompt for context.",
+    ],
+    parameters: Type.Object({
+      action: StringEnum(["add", "list"] as const),
+      type: Type.Optional(
+        StringEnum(["decision", "learning", "progress"] as const)
+      ),
+      content: Type.Optional(
+        Type.String({ description: "Journal entry content (required for add)" })
+      ),
+      context: Type.Optional(
+        Type.String({ description: "Optional context (e.g., task ID, topic)" })
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Number of entries to show (default 20, for list)" })
+      ),
+    }),
+
+    async execute(_id, params) {
+      if (!mySession) throw new Error("pmux session not active");
+
+      switch (params.action) {
+        case "add": {
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!params.type) throw new Error("Entry type is required for add (decision, learning, or progress).");
+          if (!params.content) throw new Error("Content is required for add.");
+
+          const entry = {
+            timestamp: new Date().toISOString(),
+            agent: myName,
+            agentId: myId,
+            type: params.type,
+            content: params.content,
+            context: params.context,
+          };
+          addJournalEntry(mySession, entry);
+
+          return {
+            content: [{
+              type: "text",
+              text: `✓ Journal entry added: ${formatJournalEntry(entry)}`,
+            }],
+            details: { entry },
+          };
+        }
+
+        case "list": {
+          const limit = params.limit ?? 20;
+          const entries = readJournalEntries(mySession, limit, params.type);
+
+          if (entries.length === 0) {
+            const typeNote = params.type ? ` of type "${params.type}"` : "";
+            return {
+              content: [{ type: "text", text: `No journal entries found${typeNote}.` }],
+              details: { entries: [] },
+            };
+          }
+
+          const lines = entries.map((e) => `  ${formatJournalEntry(e)}`);
+          const typeNote = params.type ? ` (${params.type})` : "";
+          return {
+            content: [{
+              type: "text",
+              text: `Journal${typeNote} (${entries.length} entries):\n\n${lines.join("\n")}`,
+            }],
+            details: { entries },
           };
         }
 
