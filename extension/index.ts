@@ -151,12 +151,13 @@ export default function (pi: ExtensionAPI) {
     );
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event) => {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
       heartbeatTimer = undefined;
     }
-    if (mySession && myName) {
+    // Only deregister on actual quit — keep registry entry on reload
+    if (event.reason !== "reload" && mySession && myName) {
       await deregister(mySession, myName).catch(() => {});
     }
     currentCtx = undefined;
