@@ -81,6 +81,25 @@ export default function (pi: ExtensionAPI) {
     myRole = process.env.PMUX_ROLE || `Agent in ${ctx.cwd}`;
     myPane = tmux.pane;
 
+    // Restore previous registration from registry (survives /reload)
+    // Only when no explicit PMUX_AGENT env is set
+    if (!process.env.PMUX_AGENT) {
+      const registry = await readRegistry(mySession);
+      const existing = Object.values(registry).find((a) => a.pane === myPane);
+      if (existing) {
+        myName = existing.name;
+        myRole = existing.role;
+        if (existing.roleName) {
+          const role = await getRole(mySession, existing.roleName);
+          if (role) {
+            myRoleName = role.name;
+            myRole = role.name;
+            myRoleInstructions = role.instructions;
+          }
+        }
+      }
+    }
+
     // If PMUX_ROLE_NAME is set (from launcher with config), load role instructions
     const envRoleName = process.env.PMUX_ROLE_NAME;
     if (envRoleName) {
