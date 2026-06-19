@@ -4,23 +4,37 @@ Run multiple [Pi](https://github.com/earendil-works/pi) agents in tmux panes. Th
 
 No servers, no daemons, no extra dependencies — just tmux, Node.js, and a Pi extension.
 
+## Install
+
+### Option 1: Pi package (recommended)
+
+```bash
+# Install the extension
+pi install git:github.com/rezabaram/pmux
+
+# Add the CLI to your PATH (pick one)
+ln -s ~/.pi/agent/git/github.com/rezabaram/pmux/bin/pmux ~/.local/bin/pmux
+# or
+echo 'export PATH="$PATH:$HOME/.pi/agent/git/github.com/rezabaram/pmux/bin"' >> ~/.bashrc
+```
+
+### Option 2: Clone
+
+```bash
+git clone https://github.com/rezabaram/pmux.git ~/pmux
+ln -s ~/pmux/extension ~/.pi/agent/extensions/pmux
+ln -s ~/pmux/bin/pmux ~/.local/bin/pmux
+```
+
 ## Quick Start — Incremental Workflow
 
 The simplest way to start: no config files, build the environment as you go.
 
 ```bash
-# 1. Install the extension (one-time setup)
-ln -s "$(pwd)/extension" ~/.pi/agent/extensions/pmux
-
-# 2. Add the launcher to your PATH
-chmod +x bin/pmux
-export PATH="$PATH:$(pwd)/bin"
-
-# 3. Start a session (opens tmux with pi in your current directory)
 pmux
 ```
 
-You're now in a tmux session with Pi running. Here's the incremental workflow:
+You're now in a tmux session with Pi running:
 
 ```
 # Step 1: Define roles (ask the LLM or type directly)

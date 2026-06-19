@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "description": "Pi multi-agent coordination via tmux",
   "type": "module",
+  "keywords": ["pi-package"],
   "bin": {
     "pmux": "./bin/pmux"
+  },
+  "pi": {
+    "extensions": ["./extension/index.ts"]
   },
   "license": "MIT"
 }
