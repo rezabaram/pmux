@@ -12,19 +12,23 @@ No servers, no daemons, no extra dependencies — just tmux, Node.js, and a Pi e
 # Install the extension
 pi install git:github.com/rezabaram/pmux
 
-# Add the CLI to your PATH (pick one)
+# Add the CLI to your PATH
+mkdir -p ~/.local/bin
 ln -s ~/.pi/agent/git/github.com/rezabaram/pmux/bin/pmux ~/.local/bin/pmux
-# or
-echo 'export PATH="$PATH:$HOME/.pi/agent/git/github.com/rezabaram/pmux/bin"' >> ~/.bashrc
 ```
+
+Make sure `~/.local/bin` is in your `PATH`. Update later with `pi update`.
 
 ### Option 2: Clone
 
 ```bash
 git clone https://github.com/rezabaram/pmux.git ~/pmux
 ln -s ~/pmux/extension ~/.pi/agent/extensions/pmux
+mkdir -p ~/.local/bin
 ln -s ~/pmux/bin/pmux ~/.local/bin/pmux
 ```
+
+Update later with `cd ~/pmux && git pull`.
 
 ## Quick Start — Incremental Workflow
 
