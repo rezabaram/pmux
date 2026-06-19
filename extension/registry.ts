@@ -13,7 +13,7 @@
 import { readFile, writeFile, rename, mkdir, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ async function writeRegistry(session: string, data: Registry): Promise<void> {
 
 /** Generate a new agent UUID. */
 export function newAgentId(): string {
-  return randomUUID();
+  return randomBytes(4).toString("hex");
 }
 
 /** Register or update an agent in the registry. */

@@ -26,7 +26,7 @@ import {
 import { watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -182,5 +182,5 @@ export function watchInbox(
 
 /** Generate a unique message ID. */
 export function newMessageId(): string {
-  return randomUUID();
+  return randomBytes(4).toString("hex");
 }
