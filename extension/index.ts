@@ -1239,6 +1239,7 @@ export default function (pi: ExtensionAPI) {
       "Use pmux_journal to record important decisions, things you've learned, and progress updates.",
       "Journal entries are shared across all agents and persist across sessions.",
       "Recent entries are automatically included in the system prompt for context.",
+      "When you discover ways to improve team alignment, code quality, or ways of working, capture them as a 'learning' — these shape how the team collaborates and raises the quality bar.",
     ],
     parameters: Type.Object({
       action: StringEnum(["add", "list"] as const),
