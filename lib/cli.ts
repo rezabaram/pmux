@@ -101,6 +101,29 @@ function shellEscape(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+function isInsideTmux(): boolean {
+  return !!process.env.TMUX;
+}
+
+function currentTmuxSession(): string {
+  if (!isInsideTmux()) return "";
+  return exec("tmux display-message -p '#{session_name}'");
+}
+
+function joinSession(session: string): void {
+  if (isInsideTmux()) {
+    const current = currentTmuxSession();
+    if (current === session) {
+      console.log(`Already in session '${session}'.`);
+      process.exit(0);
+    }
+    // Switch from within tmux
+    execSync(`tmux switch-client -t ${shellEscape(session)}`, { stdio: "inherit" });
+  } else {
+    execSync(`tmux attach -t ${shellEscape(session)}`, { stdio: "inherit" });
+  }
+}
+
 function deriveSessionName(): string {
   return basename(process.cwd())
     .toLowerCase()
@@ -165,7 +188,7 @@ function cmdQuick(args: string[]): void {
 
   if (tmuxHasSession(session)) {
     console.log(`Session '${session}' already exists. Attaching...`);
-    execSync(`tmux attach -t ${shellEscape(session)}`, { stdio: "inherit" });
+    joinSession(session);
     process.exit(0);
   }
 
@@ -193,7 +216,7 @@ function cmdQuick(args: string[]): void {
   console.log(`  Register role:   /pmux_register <roleName>\n`);
   console.log(`Attaching now...`);
 
-  execSync(`tmux attach -t ${shellEscape(session)}`, { stdio: "inherit" });
+  joinSession(session);
 }
 
 function cmdStart(args: string[]): void {
@@ -510,7 +533,7 @@ function cmdAttach(args: string[]): void {
     die(`no tmux session '${session}' found. Start one with: pmux`);
   }
 
-  execSync(`tmux attach -t ${shellEscape(session)}`, { stdio: "inherit" });
+  joinSession(session);
 }
 
 function cmdHelp(): void {
