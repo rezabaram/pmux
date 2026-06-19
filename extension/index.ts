@@ -1,33 +1,38 @@
 /**
- * pmux — Pi Multi-Agent Coordination via tmux
+ * pmux — Pi Multi-Agent Coordination
  *
- * Extension entry point. Handles:
- * - Auto-registration on session start (with session identity)
- * - Heartbeat interval & deregistration on shutdown
- * - Role definitions (add/list/remove via pmux_role tool)
- * - Agent registration with a role (/pmux_register command)
- * - Default model from PMUX_MODEL env or session config
- * - System prompt injection: agent roster + role instructions
- * - Custom tools: pmux_list, pmux_send, pmux_broadcast, pmux_role
- * - Status widget showing online agents
+ * Terminal-agnostic multi-agent coordination for Pi.
+ * Communication uses file-based inboxes (no tmux dependency).
+ * tmux integration is optional (visual enhancements only).
  *
- * Agents are addressed as "name" (same session) or "session/name" (cross-session).
- * Messages include full session/name identity: [pmux:session/name]
+ * Agent lifecycle:
+ *   /pmux_register  — create a new agent (UUID, name, team, role)
+ *   /pmux_login     — resume an existing offline agent
+ *   session shutdown — agent goes offline (persists for later login)
+ *
+ * Tools: pmux_role, pmux_list, pmux_send, pmux_broadcast
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
+import type { FSWatcher } from "node:fs";
 import {
   type AgentInfo,
   type RoleDefinition,
   readRegistry,
   readAllRegistries,
-  register,
-  deregister,
+  registerAgent,
+  removeAgent,
   updateAgent,
   updateHeartbeat,
-  filterStaleAgents,
+  goOnline,
+  goOffline,
+  newAgentId,
+  findByName,
+  findById,
+  getOnlineAgents,
+  getOfflineAgents,
   resolveAgent,
   formatAddress,
   readRoles,
@@ -37,31 +42,128 @@ import {
   readSessionConfig,
   writeSessionConfig,
 } from "./registry";
-import { detectTmuxPane, sendKeys } from "./tmux";
+import {
+  ensureInbox,
+  sendToInbox,
+  readPendingMessages,
+  deleteMessage,
+  watchInbox,
+  newMessageId,
+  type InboxMessage,
+} from "./messaging";
+import { detectTmux, setPaneTitle, setWindowName } from "./tmux";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
-const STALE_THRESHOLD_MS = 120_000;
 
 export default function (pi: ExtensionAPI) {
   // ── State ────────────────────────────────────────────────────
+  let myId: string | undefined; // UUID — stable across restarts
   let myName: string | undefined;
-  let myRole: string | undefined; // human-readable description
-  let myRoleName: string | undefined; // references a RoleDefinition
-  let myRoleInstructions: string | undefined; // loaded from role definition
-  let myTeam: string | undefined; // team name (= tmux window name)
+  let myRole: string | undefined;
+  let myRoleName: string | undefined;
+  let myRoleInstructions: string | undefined;
+  let myTeam: string | undefined;
   let mySession: string | undefined;
-  let myPane: string | undefined;
+  let myPane: string | undefined; // only if tmux
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let inboxWatcher: FSWatcher | undefined;
   let currentCtx: ExtensionContext | undefined;
 
   function myAddress(): string {
     return formatAddress(mySession!, myName!);
   }
 
-  /** Message prefix: [pmux:session/name (role)] or [pmux:session/name] */
   function myPrefix(): string {
     const addr = myAddress();
     return myRoleName ? `[pmux:${addr} (${myRoleName})]` : `[pmux:${addr}]`;
+  }
+
+  // ── Agent Startup/Shutdown Helpers ───────────────────────────
+
+  /** Common setup after register or login. */
+  async function startAgent(ctx: ExtensionContext): Promise<void> {
+    if (!myId || !mySession || !myName) return;
+
+    // Mark online
+    await goOnline(mySession, myId, process.pid, myPane);
+
+    // Ensure inbox exists
+    ensureInbox(mySession, myId);
+
+    // Start heartbeat
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(async () => {
+      if (mySession && myId) {
+        await updateHeartbeat(mySession, myId).catch(() => {});
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+
+    // Start inbox watcher — deliver messages via pi.sendUserMessage
+    if (inboxWatcher) inboxWatcher.close();
+    inboxWatcher = watchInbox(mySession, myId, (msg, filename) => {
+      const prefix = msg.fromRole
+        ? `[pmux:${msg.fromSession}/${msg.fromName} (${msg.fromRole})]`
+        : `[pmux:${msg.fromSession}/${msg.fromName}]`;
+
+      pi.sendUserMessage(`${prefix} ${msg.message}`, {
+        deliverAs: "followUp",
+      });
+      deleteMessage(mySession!, myId!, filename);
+    });
+
+    // Deliver any pending messages (sent while offline)
+    const pending = readPendingMessages(mySession, myId);
+    for (const { msg, filename } of pending) {
+      const prefix = msg.fromRole
+        ? `[pmux:${msg.fromSession}/${msg.fromName} (${msg.fromRole})]`
+        : `[pmux:${msg.fromSession}/${msg.fromName}]`;
+      pi.sendUserMessage(`${prefix} ${msg.message}`, {
+        deliverAs: "followUp",
+      });
+      deleteMessage(mySession, myId, filename);
+    }
+
+    // Persist UUID in pi session (survives /reload)
+    pi.appendEntry("pmux-agent", { id: myId, session: mySession });
+
+    // tmux visual enhancements (optional)
+    updateTitles(ctx);
+    await refreshStatusWidget(ctx);
+  }
+
+  /** Cleanup on shutdown. */
+  function stopAgent(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
+    if (inboxWatcher) {
+      inboxWatcher.close();
+      inboxWatcher = undefined;
+    }
+  }
+
+  /** Set tmux pane title and window name (no-op without tmux). */
+  function updateTitles(ctx: ExtensionContext): void {
+    const name = myName ?? "pi";
+    const paneTitle = myRoleName ? `${name} (${myRoleName})` : name;
+
+    ctx.ui.setTitle(paneTitle);
+
+    if (myPane) {
+      setPaneTitle(myPane, paneTitle);
+      if (myTeam) setWindowName(myPane, myTeam);
+    }
+  }
+
+  /** Load role instructions from roles.json. */
+  async function loadRoleInstructions(session: string, roleName: string): Promise<boolean> {
+    const role = await getRole(session, roleName);
+    if (!role) return false;
+    myRoleName = role.name;
+    myRole = role.name;
+    myRoleInstructions = role.instructions;
+    return true;
   }
 
   // ── Lifecycle ────────────────────────────────────────────────
@@ -69,146 +171,155 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
 
-    // Detect tmux environment
-    const tmux = await detectTmuxPane();
-    if (!tmux) {
-      ctx.ui.notify("pmux: not running inside tmux — disabled", "warning");
-      return;
+    // Determine session name
+    const tmux = await detectTmux();
+    mySession = process.env.PMUX_SESSION || tmux?.session || "default";
+    myPane = tmux?.pane;
+
+    // Ensure session directory exists
+    const config = await readSessionConfig(mySession);
+    if (!config.createdAt) {
+      config.createdAt = new Date().toISOString();
+      if (process.env.PMUX_MODEL && !config.model) {
+        config.model = process.env.PMUX_MODEL;
+      }
+      await writeSessionConfig(mySession, config);
     }
 
-    // Resolve agent identity
-    mySession = process.env.PMUX_SESSION || tmux.session;
-    myName = process.env.PMUX_AGENT || deriveAgentName(ctx.cwd);
-    myRole = process.env.PMUX_ROLE || `Agent in ${ctx.cwd}`;
-    myPane = tmux.pane;
+    // Try to recover UUID from pi session entries (reload recovery)
+    let recoveredId: string | undefined;
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "pmux-agent") {
+        recoveredId = (entry.data as { id: string }).id;
+      }
+    }
 
-    // Restore previous registration from registry (survives /reload)
-    // Only when no explicit PMUX_AGENT env is set
-    if (!process.env.PMUX_AGENT) {
-      const registry = await readRegistry(mySession);
-      const existing = Object.values(registry).find((a) => a.pane === myPane);
-      if (existing) {
+    if (recoveredId) {
+      // Reload recovery — resume agent
+      const agent = await findById(mySession, recoveredId);
+      if (agent) {
+        myId = agent.id;
+        myName = agent.name;
+        myRole = agent.role;
+        myTeam = agent.team;
+        if (agent.roleName) {
+          await loadRoleInstructions(mySession, agent.roleName);
+        }
+        await startAgent(ctx);
+        ctx.ui.notify(`pmux: resumed as "${myName}" in session "${mySession}"`, "info");
+        return;
+      }
+    }
+
+    // Auto-register from env vars (config-based flow)
+    if (process.env.PMUX_AGENT) {
+      const existingName = process.env.PMUX_AGENT;
+      const existing = await findByName(mySession, existingName);
+
+      if (existing && existing.status === "offline") {
+        // Login as existing agent
+        myId = existing.id;
         myName = existing.name;
         myRole = existing.role;
-        myTeam = existing.team;
+        myTeam = existing.team || process.env.PMUX_TEAM;
         if (existing.roleName) {
-          const role = await getRole(mySession, existing.roleName);
-          if (role) {
-            myRoleName = role.name;
-            myRole = role.name;
-            myRoleInstructions = role.instructions;
-          }
+          await loadRoleInstructions(mySession, existing.roleName);
         }
+      } else if (!existing) {
+        // Create new agent
+        myId = newAgentId();
+        myName = existingName;
+        myRole = process.env.PMUX_ROLE || `Agent ${existingName}`;
+        myTeam = process.env.PMUX_TEAM;
+
+        const envRoleName = process.env.PMUX_ROLE_NAME;
+        if (envRoleName) {
+          await loadRoleInstructions(mySession, envRoleName);
+        }
+
+        const agent: AgentInfo = {
+          id: myId,
+          name: myName,
+          session: mySession,
+          team: myTeam,
+          role: myRole,
+          roleName: myRoleName,
+          cwd: ctx.cwd,
+          pane: myPane,
+          pid: process.pid,
+          status: "online",
+          registeredAt: new Date().toISOString(),
+          lastHeartbeat: new Date().toISOString(),
+        };
+        await registerAgent(mySession, agent);
+      }
+
+      if (myId) {
+        await startAgent(ctx);
+        ctx.ui.notify(`pmux: registered as "${myName}" in session "${mySession}"`, "info");
+        return;
       }
     }
 
-    // If PMUX_ROLE_NAME is set (from launcher with config), load role instructions
-    const envRoleName = process.env.PMUX_ROLE_NAME;
-    if (envRoleName) {
-      const role = await getRole(mySession, envRoleName);
-      if (role) {
-        myRoleName = role.name;
-        myRole = role.name;
-        myRoleInstructions = role.instructions;
-      }
-    }
-
-    // If PMUX_TEAM is set (from launcher with config), use it
-    if (process.env.PMUX_TEAM) {
-      myTeam = process.env.PMUX_TEAM;
-    }
-
-    // Register in shared registry
-    const agentInfo: AgentInfo = {
-      name: myName,
-      session: mySession,
-      team: myTeam,
-      role: myRole,
-      roleName: myRoleName,
-      cwd: ctx.cwd,
-      pane: myPane,
-      pid: process.pid,
-      registeredAt: new Date().toISOString(),
-      lastHeartbeat: new Date().toISOString(),
-      status: "idle",
-    };
-
-    await register(mySession, agentInfo);
-
-    // Start heartbeat
-    heartbeatTimer = setInterval(async () => {
-      if (mySession && myName) {
-        await updateHeartbeat(mySession, myName).catch(() => {});
-      }
-    }, HEARTBEAT_INTERVAL_MS);
-
-    // Apply default model from PMUX_MODEL env or session config
+    // Apply default model
     await applyDefaultModel(ctx);
 
-    // Ensure session dir exists (for roles/config)
-    await ensureSessionConfig(mySession);
-
-    // Update pane title and status widget
-    updatePaneTitle(ctx);
-    await refreshStatusWidget(ctx);
-
-    const roleLabel = myRoleName ? ` (role: ${myRoleName})` : "";
+    // No agent identity yet — wait for /pmux_register or /pmux_login
     ctx.ui.notify(
-      `pmux: registered as "${myAddress()}"${roleLabel} in session "${mySession}"`,
+      `pmux: session "${mySession}". Use /pmux_register or /pmux_login to join.`,
       "info"
     );
   });
 
   pi.on("session_shutdown", async (event) => {
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = undefined;
+    stopAgent();
+
+    // Mark offline (unless reloading — keep online for recovery)
+    if (event.reason !== "reload" && mySession && myId) {
+      await goOffline(mySession, myId).catch(() => {});
     }
-    // Only deregister on actual quit — keep registry entry on reload
-    if (event.reason !== "reload" && mySession && myName) {
-      await deregister(mySession, myName).catch(() => {});
-    }
+
     currentCtx = undefined;
   });
 
-  // ── Track agent status ───────────────────────────────────────
+  // ── Agent Status Tracking ────────────────────────────────────
 
   pi.on("agent_start", async () => {
-    if (mySession && myName) {
-      await updateHeartbeat(mySession, myName, "working").catch(() => {});
+    if (mySession && myId) {
+      await updateHeartbeat(mySession, myId).catch(() => {});
     }
   });
 
   pi.on("agent_end", async () => {
-    if (mySession && myName) {
-      await updateHeartbeat(mySession, myName, "idle").catch(() => {});
+    if (mySession && myId) {
+      await updateHeartbeat(mySession, myId).catch(() => {});
     }
     if (currentCtx) {
       await refreshStatusWidget(currentCtx);
     }
   });
 
-  // ── System prompt injection ──────────────────────────────────
+  // ── System Prompt Injection ──────────────────────────────────
 
   pi.on("before_agent_start", async (event) => {
     if (!mySession || !myName) return;
 
     let extra = "";
 
-    // Inject role-specific instructions
+    // Inject role instructions
     if (myRoleInstructions) {
       extra += `\n\n## Your Role: ${myRoleName}\n${myRoleInstructions}`;
     }
 
-    // Gather same-session agents
-    const registry = await readRegistry(mySession);
-    const alive = filterStaleAgents(registry, STALE_THRESHOLD_MS);
-    const sameSessionOthers = alive.filter((a) => a.name !== myName);
+    // Gather online agents
+    const onlineAgents = await getOnlineAgents(mySession);
+    const sameSessionOthers = onlineAgents.filter((a) => a.id !== myId);
 
-    // Gather cross-session agents
+    // Cross-session agents
     const allAgents = await readAllRegistries();
-    const allAlive = filterStaleAgents(allAgents, STALE_THRESHOLD_MS);
-    const crossSessionAgents = allAlive.filter((a) => a.session !== mySession);
+    const crossSessionAgents = allAgents.filter(
+      (a) => a.session !== mySession && a.status === "online"
+    );
 
     const hasOthers = sameSessionOthers.length > 0 || crossSessionAgents.length > 0;
 
@@ -216,15 +327,14 @@ export default function (pi: ExtensionAPI) {
 
     extra += `\n\n## Multi-Agent Environment (pmux)`;
     extra += `\nYou are agent "${myName}" in session "${mySession}" (full address: ${myAddress()}).`;
-    if (myRoleName) {
-      extra += `\nRole: ${myRoleName}.`;
-    }
+    if (myRoleName) extra += `\nRole: ${myRoleName}.`;
+    if (myTeam) extra += `\nTeam: ${myTeam}.`;
 
     if (sameSessionOthers.length > 0) {
       const list = sameSessionOthers
         .map((a) => {
-          const roleLabel = a.roleName || a.role;
-          return `  - ${a.name} (${formatAddress(a.session, a.name)}): ${roleLabel} [${a.status}, cwd: ${a.cwd}]`;
+          const parts = [a.team, a.roleName || a.role, a.name].filter(Boolean);
+          return `  - ${a.name} (${formatAddress(a.session, a.name)}): ${parts.join(":")} [${a.status}]`;
         })
         .join("\n");
       extra += `\n\nSame-session agents (address as "${mySession}/<name>" or just "<name>"):\n${list}`;
@@ -233,8 +343,8 @@ export default function (pi: ExtensionAPI) {
     if (crossSessionAgents.length > 0) {
       const list = crossSessionAgents
         .map((a) => {
-          const roleLabel = a.roleName || a.role;
-          return `  - ${formatAddress(a.session, a.name)}: ${roleLabel} [${a.status}, cwd: ${a.cwd}]`;
+          const parts = [a.team, a.roleName || a.role, a.name].filter(Boolean);
+          return `  - ${formatAddress(a.session, a.name)}: ${parts.join(":")} [${a.status}]`;
         })
         .join("\n");
       extra += `\nCross-session agents (must use full address "session/name"):\n${list}`;
@@ -259,7 +369,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── Tools ────────────────────────────────────────────────────
 
-  // ─ pmux_role: manage role definitions ────────────────────────
+  // ─ pmux_role ─────────────────────────────────────────────────
 
   pi.registerTool({
     name: "pmux_role",
@@ -287,76 +397,38 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params) {
-      if (!mySession) {
-        throw new Error("pmux is not active (not running inside tmux)");
-      }
+      if (!mySession) throw new Error("pmux session not active");
 
       switch (params.action) {
         case "add": {
           if (!params.name) throw new Error("Role name is required for add.");
-          if (!params.instructions)
-            throw new Error("Instructions are required for add.");
-
-          const role: RoleDefinition = {
-            name: params.name,
-            instructions: params.instructions,
-          };
-          await addRole(mySession, role);
-
+          if (!params.instructions) throw new Error("Instructions are required for add.");
+          await addRole(mySession, { name: params.name, instructions: params.instructions });
           return {
-            content: [
-              {
-                type: "text",
-                text: `Role "${params.name}" added. Agents can register with: /pmux_register ${params.name}`,
-              },
-            ],
-            details: { role },
+            content: [{ type: "text", text: `Role "${params.name}" added. Agents can register with: /pmux_register` }],
+            details: { role: { name: params.name, instructions: params.instructions } },
           };
         }
-
         case "list": {
           const roles = await readRoles(mySession);
           const entries = Object.values(roles);
-
           if (entries.length === 0) {
             return {
-              content: [
-                {
-                  type: "text",
-                  text: "No roles defined. Use pmux_role with action=add to create one.",
-                },
-              ],
+              content: [{ type: "text", text: "No roles defined. Use pmux_role with action=add to create one." }],
               details: { roles: [] },
             };
           }
-
           const lines = entries.map(
             (r) => `- ${r.name}: ${r.instructions.slice(0, 120)}${r.instructions.length > 120 ? "…" : ""}`
           );
-
-          return {
-            content: [{ type: "text", text: lines.join("\n") }],
-            details: { roles: entries },
-          };
+          return { content: [{ type: "text", text: lines.join("\n") }], details: { roles: entries } };
         }
-
         case "remove": {
           if (!params.name) throw new Error("Role name is required for remove.");
           const removed = await removeRole(mySession, params.name);
-          if (!removed) {
-            throw new Error(
-              `Role "${params.name}" not found. Use pmux_role with action=list to see available roles.`
-            );
-          }
-
-          return {
-            content: [
-              { type: "text", text: `Role "${params.name}" removed.` },
-            ],
-            details: {},
-          };
+          if (!removed) throw new Error(`Role "${params.name}" not found.`);
+          return { content: [{ type: "text", text: `Role "${params.name}" removed.` }], details: {} };
         }
-
         default:
           throw new Error(`Unknown action: ${params.action}`);
       }
@@ -369,39 +441,27 @@ export default function (pi: ExtensionAPI) {
     name: "pmux_list",
     label: "List Agents",
     description:
-      "List online pmux agents with their session, name, role, working directory, and status. " +
-      "Set allSessions=true to include agents from other tmux sessions.",
-    promptSnippet:
-      "List online pmux agents and their roles/status (supports cross-session discovery)",
+      "List online pmux agents with their session, name, role, team, and status. " +
+      "Set allSessions=true to include agents from other sessions.",
+    promptSnippet: "List online pmux agents and their roles/status (supports cross-session discovery)",
     parameters: Type.Object({
       allSessions: Type.Optional(
-        Type.Boolean({
-          description:
-            "If true, list agents from all pmux sessions. Default: false (same session only).",
-        })
+        Type.Boolean({ description: "If true, list agents from all sessions. Default: false." })
       ),
     }),
 
     async execute(_id, params) {
-      if (!mySession) {
-        throw new Error("pmux is not active (not running inside tmux)");
-      }
+      if (!mySession) throw new Error("pmux session not active");
 
       let agents: AgentInfo[];
-
       if (params.allSessions) {
-        const all = await readAllRegistries();
-        agents = filterStaleAgents(all, STALE_THRESHOLD_MS);
+        agents = (await readAllRegistries()).filter((a) => a.status === "online");
       } else {
-        const registry = await readRegistry(mySession);
-        agents = filterStaleAgents(registry, STALE_THRESHOLD_MS);
+        agents = await getOnlineAgents(mySession);
       }
 
       if (agents.length === 0) {
-        return {
-          content: [{ type: "text", text: "No agents online." }],
-          details: { agents: [] },
-        };
+        return { content: [{ type: "text", text: "No agents online." }], details: { agents: [] } };
       }
 
       // Group by session
@@ -415,24 +475,18 @@ export default function (pi: ExtensionAPI) {
       const sections: string[] = [];
       for (const [session, sessionAgents] of bySession) {
         const isCurrent = session === mySession;
-        const header = isCurrent
-          ? `Session: ${session} (current)`
-          : `Session: ${session}`;
+        const header = isCurrent ? `Session: ${session} (current)` : `Session: ${session}`;
         const lines = sessionAgents.map((a) => {
-          const isMe = a.name === myName && a.session === mySession;
+          const isMe = a.id === myId;
           const marker = isMe ? " (you)" : "";
           const addr = formatAddress(session, a.name);
-          const roleLabel = a.roleName ? `role:${a.roleName}` : a.role;
-          const teamLabel = a.team ? ` team:${a.team}` : "";
-          return `  - ${addr}${marker} [${a.status}]:${teamLabel} ${roleLabel} (cwd: ${a.cwd})`;
+          const label = [a.team, a.roleName, a.name].filter(Boolean).join(":");
+          return `  - ${addr}${marker} [${a.status}]: ${label} (cwd: ${a.cwd})`;
         });
         sections.push(`${header}\n${lines.join("\n")}`);
       }
 
-      return {
-        content: [{ type: "text", text: sections.join("\n\n") }],
-        details: { agents },
-      };
+      return { content: [{ type: "text", text: sections.join("\n\n") }], details: { agents } };
     },
   });
 
@@ -442,12 +496,9 @@ export default function (pi: ExtensionAPI) {
     name: "pmux_send",
     label: "Send to Agent",
     description:
-      'Send a message or instruction to another pmux agent. ' +
-      'Use just the name for same-session agents (e.g., "backend") ' +
-      'or "session/name" for cross-session agents (e.g., "other-project/backend"). ' +
-      "The message appears as a user prompt in their Pi terminal.",
-    promptSnippet:
-      "Send a message to a pmux agent by name or session/name address",
+      'Send a message to another pmux agent. Use "name" for same-session or "session/name" for cross-session. ' +
+      "Delivered to the agent's inbox — works even if they're busy or offline.",
+    promptSnippet: "Send a message to a pmux agent by name or session/name address",
     promptGuidelines: [
       "Use pmux_list first to see which agents are available before using pmux_send.",
       "When using pmux_send, be specific about what you need from the other agent.",
@@ -455,49 +506,41 @@ export default function (pi: ExtensionAPI) {
       "After using pmux_send, do not wait — continue with your own work unless you need their response first.",
     ],
     parameters: Type.Object({
-      to: Type.String({
-        description:
-          'Target agent: "name" for same session, or "session/name" for cross-session',
-      }),
+      to: Type.String({ description: '"name" for same session, or "session/name" for cross-session' }),
       message: Type.String({ description: "Message or instruction to send" }),
     }),
 
     async execute(_id, params) {
-      if (!mySession || !myName) {
-        throw new Error("pmux is not active (not running inside tmux)");
+      if (!mySession || !myId || !myName) {
+        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
       }
 
-      const target = await resolveAgent(params.to, mySession, STALE_THRESHOLD_MS);
-
+      const target = await resolveAgent(params.to, mySession);
       if (!target) {
         const all = await readAllRegistries();
-        const alive = filterStaleAgents(all, STALE_THRESHOLD_MS).filter(
-          (a) => !(a.name === myName && a.session === mySession)
-        );
-        const available = alive.map((a) => formatAddress(a.session, a.name)).join(", ");
-        throw new Error(
-          `Agent "${params.to}" not found or offline. Available agents: ${available || "none"}`
-        );
+        const online = all.filter((a) => a.status === "online" && a.id !== myId);
+        const available = online.map((a) => formatAddress(a.session, a.name)).join(", ");
+        throw new Error(`Agent "${params.to}" not found. Available: ${available || "none"}`);
       }
+
+      if (target.id === myId) throw new Error("Cannot send a message to yourself.");
+
+      const msg: InboxMessage = {
+        id: newMessageId(),
+        from: myId,
+        fromName: myName,
+        fromRole: myRoleName,
+        fromSession: mySession,
+        timestamp: new Date().toISOString(),
+        message: params.message,
+      };
+
+      sendToInbox(target.session, target.id, msg);
 
       const targetAddr = formatAddress(target.session, target.name);
-      if (targetAddr === myAddress()) {
-        throw new Error("Cannot send a message to yourself.");
-      }
-
-      const formatted = `${myPrefix()} ${params.message}`;
-      await sendKeys(target.pane, formatted);
-
       return {
-        content: [
-          { type: "text", text: `Message sent to ${targetAddr} (${target.roleName || target.role}).` },
-        ],
-        details: {
-          to: targetAddr,
-          toSession: target.session,
-          toName: target.name,
-          pane: target.pane,
-        },
+        content: [{ type: "text", text: `Message sent to ${targetAddr} (${target.roleName || target.role}).` }],
+        details: { to: targetAddr, targetId: target.id },
       };
     },
   });
@@ -508,226 +551,244 @@ export default function (pi: ExtensionAPI) {
     name: "pmux_broadcast",
     label: "Broadcast",
     description:
-      "Send a message to multiple online pmux agents. " +
-      "By default broadcasts to same-session agents only. " +
-      "Set allSessions=true to broadcast across all sessions. " +
-      "Use sparingly — prefer targeted pmux_send when possible.",
-    promptSnippet:
-      "Broadcast a message to online pmux agents (same session or all sessions)",
+      "Send a message to all other online agents. Set allSessions=true for cross-session. " +
+      "Use sparingly — prefer targeted pmux_send.",
+    promptSnippet: "Broadcast a message to online pmux agents",
     parameters: Type.Object({
-      message: Type.String({ description: "Message to broadcast to agents" }),
+      message: Type.String({ description: "Message to broadcast" }),
       allSessions: Type.Optional(
-        Type.Boolean({
-          description:
-            "If true, broadcast to agents in all sessions. Default: false (same session only).",
-        })
+        Type.Boolean({ description: "Broadcast to all sessions. Default: false." })
       ),
     }),
 
     async execute(_id, params) {
-      if (!mySession || !myName) {
-        throw new Error("pmux is not active (not running inside tmux)");
+      if (!mySession || !myId || !myName) {
+        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
       }
 
       let agents: AgentInfo[];
       if (params.allSessions) {
-        const all = await readAllRegistries();
-        agents = filterStaleAgents(all, STALE_THRESHOLD_MS);
+        agents = (await readAllRegistries()).filter((a) => a.status === "online");
       } else {
-        const registry = await readRegistry(mySession);
-        agents = filterStaleAgents(registry, STALE_THRESHOLD_MS);
+        agents = await getOnlineAgents(mySession);
       }
 
-      const others = agents.filter(
-        (a) => !(a.name === myName && a.session === mySession)
-      );
+      const others = agents.filter((a) => a.id !== myId);
+      if (others.length === 0) throw new Error("No other agents online.");
 
-      if (others.length === 0) {
-        throw new Error("No other agents online to broadcast to.");
-      }
-
-      const formatted = `${myPrefix()} ${params.message}`;
       const errors: string[] = [];
-
       for (const agent of others) {
         try {
-          await sendKeys(agent.pane, formatted);
+          const msg: InboxMessage = {
+            id: newMessageId(),
+            from: myId,
+            fromName: myName,
+            fromRole: myRoleName,
+            fromSession: mySession,
+            timestamp: new Date().toISOString(),
+            message: params.message,
+          };
+          sendToInbox(agent.session, agent.id, msg);
         } catch (err) {
-          const addr = formatAddress(agent.session, agent.name);
-          errors.push(`${addr}: ${err instanceof Error ? err.message : String(err)}`);
+          errors.push(`${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
       const recipients = others.map((a) => formatAddress(a.session, a.name));
       let text = `Broadcast sent to ${recipients.length} agent(s): ${recipients.join(", ")}`;
-      if (errors.length > 0) {
-        text += `\nFailed for: ${errors.join("; ")}`;
-      }
+      if (errors.length > 0) text += `\nFailed: ${errors.join("; ")}`;
 
-      return {
-        content: [{ type: "text", text }],
-        details: { recipients, errors },
-      };
+      return { content: [{ type: "text", text }], details: { recipients, errors } };
     },
   });
 
   // ── Commands ─────────────────────────────────────────────────
 
-  // ─ /pmux — show status ───────────────────────────────────────
+  // ─ /pmux — status ────────────────────────────────────────────
 
   pi.registerCommand("pmux", {
-    description: "Show pmux agent status (use '/pmux all' for cross-session)",
+    description: "Show pmux status ('/pmux all' for cross-session)",
     handler: async (args, ctx) => {
-      if (!mySession || !myName) {
-        ctx.ui.notify("pmux is not active (not running inside tmux)", "warning");
+      if (!mySession) {
+        ctx.ui.notify("pmux session not active", "warning");
         return;
       }
 
       const showAll = args.trim() === "all";
       let agents: AgentInfo[];
       if (showAll) {
-        const all = await readAllRegistries();
-        agents = filterStaleAgents(all, STALE_THRESHOLD_MS);
+        agents = (await readAllRegistries()).filter((a) => a.status === "online");
       } else {
-        const registry = await readRegistry(mySession);
-        agents = filterStaleAgents(registry, STALE_THRESHOLD_MS);
+        agents = await getOnlineAgents(mySession);
       }
 
+      const identity = myId
+        ? `you: ${myAddress()} (${myRoleName || "no role"})`
+        : "not registered";
+
       const lines = agents.map((a) => {
-        const isMe = a.name === myName && a.session === mySession;
+        const isMe = a.id === myId;
         const marker = isMe ? " ◆" : "";
         const addr = formatAddress(a.session, a.name);
-        const roleLabel = a.roleName || a.role;
-        return `${addr}${marker} [${a.status}] — ${roleLabel}`;
+        const label = [a.team, a.roleName].filter(Boolean).join(":");
+        return `${addr}${marker} [${a.status}] ${label || a.role}`;
       });
 
       const header = showAll
-        ? `pmux: all sessions (you: ${myAddress()})`
-        : `pmux session: ${mySession} (you: ${myAddress()})`;
+        ? `pmux: all sessions (${identity})`
+        : `pmux: ${mySession} (${identity})`;
 
-      ctx.ui.notify(`${header}\n${lines.join("\n")}`, "info");
+      ctx.ui.notify(`${header}\n${lines.join("\n") || "(no agents online)"}`, "info");
     },
   });
 
-  // ─ /pmux_register <roleName> — register with a role ──────────
+  // ─ /pmux_register — create new agent ─────────────────────────
 
   pi.registerCommand("pmux_register", {
-    description: "Register this agent with a name, team, and role (interactive)",
+    description: "Create a new agent with name, team, and role (interactive)",
     handler: async (_args, ctx) => {
-      if (!mySession || !myName) {
-        ctx.ui.notify("pmux is not active (not running inside tmux)", "warning");
+      if (!mySession) {
+        ctx.ui.notify("pmux session not active", "warning");
         return;
       }
 
-      // 1. Check that roles exist
+      // 1. Check roles exist
       const roles = await readRoles(mySession);
       const roleNames = Object.keys(roles);
-
       if (roleNames.length === 0) {
         ctx.ui.notify(
           "No roles defined yet.\n\nAsk the LLM to create roles first, e.g.:\n" +
-            '> Create a pmux role called \"developer\" with instructions to write clean code.',
+            '> Create a pmux role called "developer" with instructions to write clean code.',
           "warning"
         );
         return;
       }
 
-      // 2. Prompt for agent name
+      // 2. Agent name
       const name = await ctx.ui.input("Agent name:", myName);
-      if (!name) {
-        ctx.ui.notify("Registration cancelled.", "info");
-        return;
-      }
+      if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-      // 3. Prompt for team
+      // 3. Team
       let team: string | undefined;
-
-      // Collect existing teams from registry
       const registry = await readRegistry(mySession);
-      const existingTeams = [
-        ...new Set(
-          Object.values(registry)
-            .map((a) => a.team)
-            .filter((t): t is string => !!t)
-        ),
-      ];
+      const existingTeams = [...new Set(
+        Object.values(registry).map((a) => a.team).filter((t): t is string => !!t)
+      )];
 
       if (existingTeams.length > 0) {
         const CREATE_NEW = "+ Create new team";
-        const teamChoice = await ctx.ui.select(
-          "Team:",
-          [...existingTeams, CREATE_NEW]
-        );
-        if (!teamChoice) {
-          ctx.ui.notify("Registration cancelled.", "info");
-          return;
-        }
-        if (teamChoice === CREATE_NEW) {
-          team = await ctx.ui.input("New team name:");
-          if (!team) {
-            ctx.ui.notify("Registration cancelled.", "info");
-            return;
-          }
-        } else {
-          team = teamChoice;
-        }
+        const choice = await ctx.ui.select("Team:", [...existingTeams, CREATE_NEW]);
+        if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
+        team = choice === CREATE_NEW
+          ? await ctx.ui.input("New team name:")
+          : choice;
+        if (!team) { ctx.ui.notify("Cancelled.", "info"); return; }
       } else {
         team = await ctx.ui.input("Team name:", myTeam);
-        if (!team) {
-          ctx.ui.notify("Registration cancelled.", "info");
-          return;
-        }
+        if (!team) { ctx.ui.notify("Cancelled.", "info"); return; }
       }
 
-      // 4. Pick a role from the list
+      // 4. Role
       const roleName = await ctx.ui.select("Choose a role:", roleNames);
-      if (!roleName) {
-        ctx.ui.notify("Registration cancelled.", "info");
-        return;
-      }
-
+      if (!roleName) { ctx.ui.notify("Cancelled.", "info"); return; }
       const role = roles[roleName]!;
 
-      // 5. If name changed, re-register under new name
-      const oldName = myName;
-      if (name !== oldName) {
-        await deregister(mySession, oldName);
-        myName = name;
+      // 5. If replacing an existing identity, go offline first
+      if (myId && mySession) {
+        await goOffline(mySession, myId);
       }
 
-      // 6. Apply team — rename tmux window
+      // 6. Create new agent
+      myId = newAgentId();
+      myName = name;
       myTeam = team;
-      if (myPane) {
-        pi.exec("tmux", ["rename-window", "-t", myPane, team]).catch(() => {});
-      }
-
-      // 7. Apply role
       myRoleName = role.name;
       myRole = role.name;
       myRoleInstructions = role.instructions;
 
-      // 8. Update registry
-      const agentInfo: AgentInfo = {
+      const agent: AgentInfo = {
+        id: myId,
         name: myName,
         session: mySession,
         team: myTeam,
         role: role.name,
         roleName: role.name,
         cwd: ctx.cwd,
-        pane: myPane!,
+        pane: myPane,
         pid: process.pid,
+        status: "online",
         registeredAt: new Date().toISOString(),
         lastHeartbeat: new Date().toISOString(),
-        status: "idle",
       };
-      await register(mySession, agentInfo);
+      await registerAgent(mySession, agent);
 
-      updatePaneTitle(ctx);
-      await refreshStatusWidget(ctx);
+      await startAgent(ctx);
 
       ctx.ui.notify(
-        `Registered as \"${myName}\" in team \"${team}\" with role \"${role.name}\".\n` +
-          "Role instructions will be injected into the system prompt on the next turn.",
+        `Registered as "${myName}" in team "${team}" with role "${role.name}".`,
+        "info"
+      );
+    },
+  });
+
+  // ─ /pmux_login — resume existing agent ───────────────────────
+
+  pi.registerCommand("pmux_login", {
+    description: "Log in as an existing offline agent",
+    handler: async (_args, ctx) => {
+      if (!mySession) {
+        ctx.ui.notify("pmux session not active", "warning");
+        return;
+      }
+
+      const offline = await getOfflineAgents(mySession);
+      if (offline.length === 0) {
+        ctx.ui.notify(
+          "No offline agents to log in as.\nUse /pmux_register to create a new agent.",
+          "info"
+        );
+        return;
+      }
+
+      // Build selection list
+      const options = offline.map((a) => {
+        const parts = [a.team, a.roleName, a.name].filter(Boolean).join(":");
+        return `${a.name} — ${parts}`;
+      });
+
+      const choice = await ctx.ui.select("Log in as:", options);
+      if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+      // Find the selected agent
+      const selectedName = choice.split(" — ")[0]!;
+      const agent = offline.find((a) => a.name === selectedName);
+      if (!agent) { ctx.ui.notify("Agent not found.", "error"); return; }
+
+      // If replacing an existing identity, go offline first
+      if (myId && mySession && myId !== agent.id) {
+        await goOffline(mySession, myId);
+      }
+
+      // Resume as this agent
+      myId = agent.id;
+      myName = agent.name;
+      myRole = agent.role;
+      myTeam = agent.team;
+      myRoleName = agent.roleName;
+      if (agent.roleName) {
+        await loadRoleInstructions(mySession, agent.roleName);
+      }
+
+      // Update pane and go online
+      await updateAgent(mySession, myId, { pane: myPane, cwd: ctx.cwd });
+      await startAgent(ctx);
+
+      // Check for pending messages
+      const pending = readPendingMessages(mySession, myId);
+      const pendingNote = pending.length > 0 ? ` ${pending.length} message(s) waiting.` : "";
+
+      ctx.ui.notify(
+        `Logged in as "${myName}" (${myRoleName || "no role"}).${pendingNote}`,
         "info"
       );
     },
@@ -735,42 +796,12 @@ export default function (pi: ExtensionAPI) {
 
   // ── Helpers ──────────────────────────────────────────────────
 
-  function deriveAgentName(cwd: string): string {
-    const base = cwd.split("/").filter(Boolean).pop() || "agent";
-    return base
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, "-")
-      .replace(/-+/g, "-");
-  }
-
-  function updatePaneTitle(ctx: ExtensionContext): void {
-    const name = myName ?? "pi";
-    const paneTitle = myRoleName ? `${name} (${myRoleName})` : name;
-
-    // Terminal title → per-pane
-    ctx.ui.setTitle(paneTitle);
-
-    if (myPane) {
-      // Pane title → per-pane (visible with pane-border-status)
-      pi.exec("tmux", ["select-pane", "-t", myPane, "-T", paneTitle]).catch(() => {});
-
-      // Window name → team (shared by all panes in the window)
-      if (myTeam) {
-        pi.exec("tmux", ["rename-window", "-t", myPane, myTeam]).catch(() => {});
-      }
-    }
-  }
-
   async function applyDefaultModel(ctx: ExtensionContext): Promise<void> {
-    // Priority: PMUX_MODEL env > session config > do nothing
     const modelStr = process.env.PMUX_MODEL;
     if (!modelStr) {
-      // Check session config
       if (mySession) {
         const config = await readSessionConfig(mySession);
-        if (config.model) {
-          await trySetModel(ctx, config.model);
-        }
+        if (config.model) await trySetModel(ctx, config.model);
       }
       return;
     }
@@ -778,51 +809,26 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function trySetModel(ctx: ExtensionContext, modelStr: string): Promise<void> {
-    // modelStr can be "provider/model" or just "model"
-    // Try to find the model in the registry
-    const allTools = pi.getAllTools(); // just to verify extension is loaded
-
-    // Search by iterating models — try exact match first
     let found = false;
 
     if (modelStr.includes("/")) {
       const [provider, id] = modelStr.split("/", 2);
-      const model = ctx.modelRegistry.find(provider, id);
-      if (model) {
-        const ok = await pi.setModel(model);
-        if (ok) found = true;
-      }
+      const model = ctx.modelRegistry.find(provider!, id!);
+      if (model) found = !!(await pi.setModel(model));
     }
 
     if (!found) {
-      // Try to find by model ID across all providers
-      // We don't have a search-all API, so we try common providers
       for (const provider of ["anthropic", "openai", "google", "local-openai"]) {
         const model = ctx.modelRegistry.find(provider, modelStr);
         if (model) {
-          const ok = await pi.setModel(model);
-          if (ok) {
-            found = true;
-            break;
-          }
+          found = !!(await pi.setModel(model));
+          if (found) break;
         }
       }
     }
 
     if (!found) {
-      ctx.ui.notify(`pmux: could not find model "${modelStr}" — using default`, "warning");
-    }
-  }
-
-  async function ensureSessionConfig(session: string): Promise<void> {
-    const config = await readSessionConfig(session);
-    if (!config.createdAt) {
-      config.createdAt = new Date().toISOString();
-      // Persist PMUX_MODEL into session config if set
-      if (process.env.PMUX_MODEL && !config.model) {
-        config.model = process.env.PMUX_MODEL;
-      }
-      await writeSessionConfig(session, config);
+      ctx.ui.notify(`pmux: model "${modelStr}" not found — using default`, "warning");
     }
   }
 
@@ -830,28 +836,25 @@ export default function (pi: ExtensionAPI) {
     if (!mySession) return;
 
     try {
-      const registry = await readRegistry(mySession);
-      const alive = filterStaleAgents(registry, STALE_THRESHOLD_MS);
+      const agents = await getOnlineAgents(mySession);
       const theme = ctx.ui.theme;
-
       const sessionLabel = theme.fg("dim", `[${mySession}] `);
 
-      if (alive.length === 0) {
+      if (agents.length === 0) {
         ctx.ui.setStatus("pmux", sessionLabel + theme.fg("dim", "no agents"));
         return;
       }
 
-      const parts = alive.map((a) => {
-        const icon = a.name === myName ? "◆" : a.status === "working" ? "●" : "○";
-        const color: "accent" | "warning" | "success" =
-          a.name === myName ? "accent" : a.status === "working" ? "warning" : "success";
+      const parts = agents.map((a) => {
+        const icon = a.id === myId ? "◆" : "○";
+        const color: "accent" | "success" = a.id === myId ? "accent" : "success";
         const label = [a.team, a.roleName, a.name].filter(Boolean).join(":");
         return theme.fg(color, `${icon} ${label}`);
       });
 
       ctx.ui.setStatus("pmux", sessionLabel + parts.join(theme.fg("dim", " │ ")));
     } catch {
-      // Ignore errors in widget update
+      // Ignore widget errors
     }
   }
 }

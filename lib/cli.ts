@@ -33,16 +33,18 @@ interface SessionConfig {
 }
 
 interface AgentInfo {
+  id: string;
   name: string;
   session: string;
+  team?: string;
   role: string;
   roleName?: string;
   cwd: string;
-  pane: string;
+  pane?: string;
   pid: number;
+  status: "online" | "offline";
   registeredAt: string;
   lastHeartbeat: string;
-  status: string;
 }
 
 interface AgentConfig {
@@ -570,15 +572,12 @@ function cmdList(args: string[]): void {
   }
 
   console.log("  Agents:");
-  const now = Date.now();
   for (const a of agentEntries) {
-    const age = now - new Date(a.lastHeartbeat).getTime();
-    const stale = age > 120_000 ? " (stale)" : "";
-    const icon = a.status === "working" ? "●" : "○";
-    const roleLabel = a.roleName ? `role:${a.roleName}` : a.role;
-    console.log(`    ${icon} ${a.name.padEnd(15)} [${a.status.padEnd(7)}]${stale}  ${roleLabel}`);
+    const icon = a.status === "online" ? "●" : "○";
+    const label = [a.team, a.roleName, a.name].filter(Boolean).join(":");
+    console.log(`    ${icon} ${a.name.padEnd(15)} [${a.status.padEnd(7)}]  ${label}`);
     console.log(`      cwd:  ${a.cwd}`);
-    console.log(`      pane: ${a.pane}`);
+    if (a.pane) console.log(`      pane: ${a.pane}`);
   }
 }
 

@@ -1,40 +1,38 @@
 /**
- * pmux — Shared Agent Registry, Roles, and Session Config
+ * pmux — Agent Registry, Roles, and Session Config
  *
- * Manages agent registration, role definitions, and session configuration
- * in shared JSON files under ~/.pmux/sessions/<session>/.
+ * Agents are keyed by UUID. Names are for human-friendly addressing.
+ * Agents persist across restarts with online/offline status.
  *
  * Files per session:
- *   agents.json  — live agent registry
+ *   agents.json  — agent registry (keyed by UUID)
  *   roles.json   — role definitions (name + instructions)
  *   config.json  — session config (default model, etc.)
- *
- * Uses atomic writes (temp file + rename) to prevent corruption.
- * Supports both same-session and cross-session agent discovery.
  */
 
 import { readFile, writeFile, rename, mkdir, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 // ─── Types ───────────────────────────────────────────────────
 
 export interface AgentInfo {
-  name: string;
-  session: string; // pmux/tmux session this agent belongs to
-  team?: string; // team name (= tmux window name)
+  id: string; // UUID — primary key, stable across restarts
+  name: string; // human-friendly display name
+  session: string; // pmux session name
+  team?: string; // team name (= tmux window name, if using tmux)
   role: string; // human-readable role description
-  roleName?: string; // references a RoleDefinition name (if registered via role)
+  roleName?: string; // references a RoleDefinition name
   cwd: string;
-  pane: string; // tmux target: "session:window.pane"
+  pane?: string; // tmux pane target (optional — only if tmux)
   pid: number;
+  status: "online" | "offline";
   registeredAt: string; // ISO 8601
   lastHeartbeat: string; // ISO 8601
-  status: "idle" | "working" | "busy";
 }
 
-export type Registry = Record<string, AgentInfo>;
+export type Registry = Record<string, AgentInfo>; // keyed by UUID
 
 export interface RoleDefinition {
   name: string;
@@ -44,20 +42,15 @@ export interface RoleDefinition {
 export type RolesMap = Record<string, RoleDefinition>;
 
 export interface SessionConfig {
-  model?: string; // default model for all agents (e.g. "claude-sonnet-4")
+  model?: string;
   createdAt?: string;
 }
 
-/** Fully qualified agent address: "session/agent". */
 export type AgentAddress = string;
 
 // ─── Paths ───────────────────────────────────────────────────
 
 const PMUX_DIR = join(homedir(), ".pmux", "sessions");
-
-function sessionDir(session: string): string {
-  return join(PMUX_DIR, session);
-}
 
 function registryPath(session: string): string {
   return join(PMUX_DIR, session, "agents.json");
@@ -99,41 +92,102 @@ async function writeRegistry(session: string, data: Registry): Promise<void> {
   await atomicWriteJson(registryPath(session), data);
 }
 
-export async function register(session: string, agent: AgentInfo): Promise<void> {
+/** Generate a new agent UUID. */
+export function newAgentId(): string {
+  return randomUUID();
+}
+
+/** Register or update an agent in the registry. */
+export async function registerAgent(session: string, agent: AgentInfo): Promise<void> {
   const registry = await readRegistry(session);
-  registry[agent.name] = agent;
+  registry[agent.id] = agent;
   await writeRegistry(session, registry);
 }
 
-export async function deregister(session: string, name: string): Promise<void> {
+/** Remove an agent entirely from the registry. */
+export async function removeAgent(session: string, id: string): Promise<void> {
   const registry = await readRegistry(session);
-  delete registry[name];
+  delete registry[id];
   await writeRegistry(session, registry);
 }
 
+/** Update specific fields of an agent. */
 export async function updateAgent(
   session: string,
-  name: string,
-  updates: Partial<Pick<AgentInfo, "role" | "roleName" | "status" | "lastHeartbeat">>
+  id: string,
+  updates: Partial<AgentInfo>
 ): Promise<void> {
   const registry = await readRegistry(session);
-  const agent = registry[name];
+  const agent = registry[id];
   if (!agent) return;
   Object.assign(agent, updates);
   await writeRegistry(session, registry);
 }
 
-export async function updateHeartbeat(
+/** Mark an agent as online with current pid/pane. */
+export async function goOnline(
   session: string,
-  name: string,
-  status?: AgentInfo["status"]
+  id: string,
+  pid: number,
+  pane?: string
 ): Promise<void> {
-  const updates: Partial<AgentInfo> = { lastHeartbeat: new Date().toISOString() };
-  if (status !== undefined) updates.status = status;
-  await updateAgent(session, name, updates);
+  await updateAgent(session, id, {
+    status: "online",
+    pid,
+    pane,
+    lastHeartbeat: new Date().toISOString(),
+  });
 }
 
-/** Read ALL registries across every session. */
+/** Mark an agent as offline. */
+export async function goOffline(session: string, id: string): Promise<void> {
+  await updateAgent(session, id, { status: "offline" });
+}
+
+/** Update heartbeat timestamp and optionally status. */
+export async function updateHeartbeat(
+  session: string,
+  id: string,
+  status?: "online" | "offline"
+): Promise<void> {
+  const updates: Partial<AgentInfo> = { lastHeartbeat: new Date().toISOString() };
+  if (status) updates.status = status;
+  await updateAgent(session, id, updates);
+}
+
+// ─── Lookups ─────────────────────────────────────────────────
+
+/** Find an agent by name within a session. */
+export async function findByName(
+  session: string,
+  name: string
+): Promise<AgentInfo | null> {
+  const registry = await readRegistry(session);
+  return Object.values(registry).find((a) => a.name === name) ?? null;
+}
+
+/** Find an agent by UUID within a session. */
+export async function findById(
+  session: string,
+  id: string
+): Promise<AgentInfo | null> {
+  const registry = await readRegistry(session);
+  return registry[id] ?? null;
+}
+
+/** Get all online agents in a session. */
+export async function getOnlineAgents(session: string): Promise<AgentInfo[]> {
+  const registry = await readRegistry(session);
+  return Object.values(registry).filter((a) => a.status === "online");
+}
+
+/** Get all offline agents in a session. */
+export async function getOfflineAgents(session: string): Promise<AgentInfo[]> {
+  const registry = await readRegistry(session);
+  return Object.values(registry).filter((a) => a.status === "offline");
+}
+
+/** Get all agents across all sessions. */
 export async function readAllRegistries(): Promise<AgentInfo[]> {
   const allAgents: AgentInfo[] = [];
   try {
@@ -152,13 +206,16 @@ export async function readAllRegistries(): Promise<AgentInfo[]> {
   return allAgents;
 }
 
-export function filterStaleAgents(
-  agents: AgentInfo[] | Registry,
-  maxAgeMs: number = 120_000
-): AgentInfo[] {
-  const list = Array.isArray(agents) ? agents : Object.values(agents);
-  const now = Date.now();
-  return list.filter((a) => now - new Date(a.lastHeartbeat).getTime() < maxAgeMs);
+/**
+ * Resolve an agent address: "name" (same session) or "session/name" (cross-session).
+ * Returns null if not found.
+ */
+export async function resolveAgent(
+  address: string,
+  defaultSession: string
+): Promise<AgentInfo | null> {
+  const { session, name } = parseAddress(address, defaultSession);
+  return findByName(session, name);
 }
 
 // ─── Roles ───────────────────────────────────────────────────
@@ -217,18 +274,4 @@ export function parseAddress(
   return i === -1
     ? { session: defaultSession, name: address }
     : { session: address.slice(0, i), name: address.slice(i + 1) };
-}
-
-export async function resolveAgent(
-  address: string,
-  defaultSession: string,
-  maxAgeMs: number = 120_000
-): Promise<AgentInfo | null> {
-  const { session, name } = parseAddress(address, defaultSession);
-  const registry = await readRegistry(session);
-  const agent = registry[name];
-  if (!agent) return null;
-  agent.session = agent.session || session;
-  if (Date.now() - new Date(agent.lastHeartbeat).getTime() >= maxAgeMs) return null;
-  return agent;
 }
