@@ -668,11 +668,18 @@ export default function (pi: ExtensionAPI) {
   }
 
   function updatePaneTitle(ctx: ExtensionContext): void {
-    const title = myRoleName ? `${myName} (${myRoleName})` : myName ?? "pi";
-    ctx.ui.setTitle(title);
-    // Also set tmux pane title (visible with pane-border-status)
+    const name = myName ?? "pi";
+
+    // Terminal title → role (shown in tmux status-right / title bar)
+    ctx.ui.setTitle(myRoleName ?? name);
+
     if (myPane) {
-      pi.exec("tmux", ["select-pane", "-t", myPane, "-T", title]).catch(() => {});
+      // Tmux window name → agent name (shown in status bar as "0:name*")
+      pi.exec("tmux", ["rename-window", "-t", myPane, name]).catch(() => {});
+
+      // Tmux pane title → name (role) for pane borders
+      const paneTitle = myRoleName ? `${name} (${myRoleName})` : name;
+      pi.exec("tmux", ["select-pane", "-t", myPane, "-T", paneTitle]).catch(() => {});
     }
   }
 
