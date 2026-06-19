@@ -1,9 +1,17 @@
 /**
- * pmux — File-Based Messaging
+ * pmux — File-Based Messaging (Crash-Safe)
  *
- * Each agent has an inbox directory: ~/.pmux/sessions/<session>/inbox/<uuid>/
- * Messages are individual JSON files, delivered via fs.watch + pi.sendUserMessage().
- * No tmux dependency. No polling.
+ * Message lifecycle:
+ *   1. Sender writes .json to target's inbox (durable)
+ *   2. Watcher picks up → appends to history → renames to .delivered
+ *   3. pi.sendUserMessage() queues for processing
+ *   4. agent_end → deletes .delivered files
+ *
+ * Crash recovery:
+ *   - .json files → never picked up → deliver
+ *   - .delivered files → queued but unconfirmed → redeliver
+ *
+ * History: all messages appended to messages.log (JSONL)
  */
 
 import {
@@ -12,6 +20,7 @@ import {
   readdirSync,
   unlinkSync,
   renameSync,
+  appendFileSync,
   mkdirSync,
 } from "node:fs";
 import { watch, type FSWatcher } from "node:fs";
@@ -37,6 +46,10 @@ const PMUX_DIR = join(homedir(), ".pmux", "sessions");
 
 function inboxDir(session: string, agentId: string): string {
   return join(PMUX_DIR, session, "inbox", agentId);
+}
+
+function historyPath(session: string): string {
+  return join(PMUX_DIR, session, "messages.log");
 }
 
 // ─── Inbox Operations ────────────────────────────────────────
@@ -66,15 +79,36 @@ export function sendToInbox(
   renameSync(tmpFile, jsonFile);
 }
 
-/** Read all pending messages from an inbox, sorted by timestamp. */
-export function readPendingMessages(
+/**
+ * Mark a message as delivered (rename .json → .delivered).
+ * Prevents the watcher from picking it up again.
+ */
+export function markAsDelivered(
+  session: string,
+  agentId: string,
+  filename: string
+): void {
+  const dir = inboxDir(session, agentId);
+  const deliveredName = filename.replace(/\.json$/, ".delivered");
+  try {
+    renameSync(join(dir, filename), join(dir, deliveredName));
+  } catch {
+    // File may have been processed already
+  }
+}
+
+/**
+ * Get all pending messages (.json) and unconfirmed messages (.delivered).
+ * Used on startup for crash recovery.
+ */
+export function getRecoverableMessages(
   session: string,
   agentId: string
 ): Array<{ msg: InboxMessage; filename: string }> {
   const dir = inboxDir(session, agentId);
   try {
     const files = readdirSync(dir)
-      .filter((f) => f.endsWith(".json"))
+      .filter((f) => f.endsWith(".json") || f.endsWith(".delivered"))
       .sort();
     return files.map((f) => ({
       msg: JSON.parse(readFileSync(join(dir, f), "utf8")) as InboxMessage,
@@ -85,22 +119,43 @@ export function readPendingMessages(
   }
 }
 
-/** Delete a processed message file. */
-export function deleteMessage(
-  session: string,
-  agentId: string,
-  filename: string
-): void {
+/**
+ * Confirm all delivered messages — delete .delivered files.
+ * Called on agent_end after processing completes.
+ */
+export function confirmDelivered(session: string, agentId: string): void {
+  const dir = inboxDir(session, agentId);
   try {
-    unlinkSync(join(inboxDir(session, agentId), filename));
+    const files = readdirSync(dir).filter((f) => f.endsWith(".delivered"));
+    for (const f of files) {
+      try {
+        unlinkSync(join(dir, f));
+      } catch {
+        // Already cleaned up
+      }
+    }
   } catch {
-    // Already deleted or doesn't exist
+    // Inbox doesn't exist yet
   }
 }
 
+// ─── History ─────────────────────────────────────────────────
+
 /**
- * Watch an inbox for new messages.
- * Calls onMessage when a new .json file appears (atomic rename).
+ * Append a message to the session's history log (JSONL format).
+ * Called when a message is first picked up (before processing).
+ */
+export function appendToHistory(session: string, message: InboxMessage): void {
+  const path = historyPath(session);
+  mkdirSync(join(PMUX_DIR, session), { recursive: true });
+  appendFileSync(path, JSON.stringify(message) + "\n", "utf8");
+}
+
+// ─── Watcher ─────────────────────────────────────────────────
+
+/**
+ * Watch an inbox for new .json messages.
+ * Calls onMessage when a new .json file appears.
  * Returns the FSWatcher (call .close() to stop).
  */
 export function watchInbox(
@@ -112,7 +167,7 @@ export function watchInbox(
   mkdirSync(dir, { recursive: true });
 
   return watch(dir, (eventType, filename) => {
-    // Only process .json files (not .tmp files being written)
+    // Only process new .json files (not .tmp, .delivered)
     if (!filename || !filename.endsWith(".json")) return;
 
     try {
@@ -120,7 +175,7 @@ export function watchInbox(
       const msg = JSON.parse(content) as InboxMessage;
       onMessage(msg, filename);
     } catch {
-      // File may have been deleted already or still being written
+      // File may have been renamed/deleted already
     }
   });
 }

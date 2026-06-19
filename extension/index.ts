@@ -45,8 +45,10 @@ import {
 import {
   ensureInbox,
   sendToInbox,
-  readPendingMessages,
-  deleteMessage,
+  getRecoverableMessages,
+  markAsDelivered,
+  confirmDelivered,
+  appendToHistory,
   watchInbox,
   newMessageId,
   type InboxMessage,
@@ -101,26 +103,33 @@ export default function (pi: ExtensionAPI) {
     // Start inbox watcher — deliver messages via pi.sendUserMessage
     if (inboxWatcher) inboxWatcher.close();
     inboxWatcher = watchInbox(mySession, myId, (msg, filename) => {
+      // Crash-safe: history first, then mark delivered, then queue
+      appendToHistory(mySession!, msg);
+      markAsDelivered(mySession!, myId!, filename);
+
       const prefix = msg.fromRole
         ? `[pmux:${msg.fromSession}/${msg.fromName} (${msg.fromRole})]`
         : `[pmux:${msg.fromSession}/${msg.fromName}]`;
-
       pi.sendUserMessage(`${prefix} ${msg.message}`, {
         deliverAs: "followUp",
       });
-      deleteMessage(mySession!, myId!, filename);
     });
 
-    // Deliver any pending messages (sent while offline)
-    const pending = readPendingMessages(mySession, myId);
-    for (const { msg, filename } of pending) {
+    // Deliver pending + crash-recovery messages
+    const recoverable = getRecoverableMessages(mySession, myId);
+    for (const { msg, filename } of recoverable) {
+      // Only append to history for new messages (not already-delivered ones)
+      if (filename.endsWith(".json")) {
+        appendToHistory(mySession, msg);
+        markAsDelivered(mySession, myId, filename);
+      }
+
       const prefix = msg.fromRole
         ? `[pmux:${msg.fromSession}/${msg.fromName} (${msg.fromRole})]`
         : `[pmux:${msg.fromSession}/${msg.fromName}]`;
       pi.sendUserMessage(`${prefix} ${msg.message}`, {
         deliverAs: "followUp",
       });
-      deleteMessage(mySession, myId, filename);
     }
 
     // Persist UUID in pi session (survives /reload)
@@ -293,6 +302,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async () => {
     if (mySession && myId) {
       await updateHeartbeat(mySession, myId).catch(() => {});
+      // Clean up .delivered files — messages confirmed processed
+      confirmDelivered(mySession, myId);
     }
     if (currentCtx) {
       await refreshStatusWidget(currentCtx);
@@ -784,7 +795,7 @@ export default function (pi: ExtensionAPI) {
       await startAgent(ctx);
 
       // Check for pending messages
-      const pending = readPendingMessages(mySession, myId);
+      const pending = getRecoverableMessages(mySession, myId);
       const pendingNote = pending.length > 0 ? ` ${pending.length} message(s) waiting.` : "";
 
       ctx.ui.notify(
