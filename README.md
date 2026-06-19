@@ -1,232 +1,105 @@
 # pmux — Pi Multi-Agent Coordination
 
-Run multiple [Pi](https://github.com/earendil-works/pi) agents that discover each other automatically and communicate via file-based inboxes — crash-safe, terminal-agnostic, with built-in file reservations and a task backlog.
+Coordinate multiple [Pi](https://github.com/earendil-works/pi) agents across terminals. Agents discover each other, communicate via file-based inboxes, share documents, manage tasks, and build shared knowledge — all from within Pi.
 
-No servers, no daemons, no extra dependencies. tmux integration is optional (visual enhancements only).
+No servers, no daemons, no tmux dependency. Just a Pi extension.
 
 ## Install
 
-### Option 1: Pi package (recommended)
-
 ```bash
-# Install the extension
 pi install git:github.com/rezabaram/pmux
-
-# Add the CLI to your PATH
-mkdir -p ~/.local/bin
-ln -s ~/.pi/agent/git/github.com/rezabaram/pmux/bin/pmux ~/.local/bin/pmux
 ```
 
-Make sure `~/.local/bin` is in your `PATH`. Update later with `pi update`.
+That's it. Start Pi in any terminal and you're ready.
 
-### Option 2: Clone
+## Quick Start
 
 ```bash
-git clone https://github.com/rezabaram/pmux.git ~/pmux
-ln -s ~/pmux/extension ~/.pi/agent/extensions/pmux
-mkdir -p ~/.local/bin
-ln -s ~/pmux/bin/pmux ~/.local/bin/pmux
+# Terminal 1
+pi
+/pmux_register          # → pick name, team, role (interactive wizard)
+
+# Terminal 2
+pi
+/pmux_register          # → another agent joins
+
+# They discover each other and can communicate
 ```
-
-Update later with `cd ~/pmux && git pull`.
-
-## Quick Start — Incremental Workflow
-
-The simplest way to start: no config files, build the environment as you go.
-
-```bash
-pmux
-```
-
-You're now in a tmux session with Pi running:
-
-```
-# Step 1: Define roles (ask the LLM or type directly)
-> Create a pmux role called "frontend" with instructions to focus on React UI development
-
-# Step 2: Split the terminal and start another pi
-#   Press Ctrl-B %  (tmux horizontal split)
-#   In the new pane, type: pi
-
-# Step 3: In the new pi, register with the role
-/pmux_register frontend
-
-# Step 4: Repeat for more agents — split, start pi, register
-```
-
-That's it. No config file needed. Agents discover each other automatically.
-
-## Quick Start — Config File
-
-For repeatable setups, define everything in a JSON config file:
-
-```bash
-pmux start --config pmux.json
-```
-
-See [examples/pmux.json](examples/pmux.json) for the format (roles, model, agents).
 
 ## How It Works
 
-1. **Launcher** (`pmux`) creates a tmux session and starts Pi
-2. **Roles** define instructions that shape agent behavior (created via tool or config)
-3. **Agents** register with roles using `/pmux_register <roleName>` (or auto-assigned from config)
-4. The **Pi extension** auto-registers agents in a shared JSON registry
-5. Agents use tools to communicate (`pmux_send`, `pmux_broadcast`), coordinate files (`pmux_reserve`), and manage work (`pmux_task`)
-6. Messages are delivered via crash-safe file-based inboxes — no tmux dependency
-7. **Cross-session**: agents in different sessions can discover and message each other
+1. **Register** — `/pmux_register` creates your agent identity (UUID, name, team, role)
+2. **Communicate** — `pmux_send` delivers messages to other agents' inboxes via `fs.watch`
+3. **Coordinate** — `pmux_task` manages a shared backlog with auto file reservations
+4. **Learn** — `pmux_journal` captures decisions and learnings, injected into every agent's prompt
 
-## Agent Addressing
+All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages are delivered instantly via filesystem notifications — no polling, no servers.
 
-Every agent has a fully qualified address: `session/name`.
+## Tools (8)
 
-| Format | Scope | Example |
-|--------|-------|---------|
-| `name` | Same session | `"backend"` |
-| `session/name` | Cross-session | `"infra/devops"` |
-
-## Roles
-
-Roles are named definitions with instructions that guide an agent's behavior.
-
-**Create roles interactively** (inside pi):
-```
-> Create a pmux role called "backend" with instructions: "You are a Node.js API developer. Build REST endpoints and business logic."
-```
-The LLM uses the `pmux_role` tool to add it.
-
-**Create roles from config** (in JSON file):
-```json
-{
-  "roles": {
-    "backend": {
-      "instructions": "You are a Node.js API developer..."
-    }
-  }
-}
-```
-
-**Register an agent with a role**:
-```
-/pmux_register backend
-```
-
-## Default Model
-
-Set a default model for all agents:
-
-```bash
-# Via command line
-pmux --model claude-sonnet-4
-```
-
-Per-agent model override is supported in the config file:
-```json
-{
-  "model": "claude-sonnet-4",
-  "agents": {
-    "frontend": { "dir": "./frontend", "role": "frontend", "model": "claude-opus-4" }
-  }
-}
-```
-
-## Agent Tools
-
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `pmux_role` | add, list, remove | Manage role definitions for the session |
-| `pmux_list` | — | List online agents (same session or all sessions) |
-| `pmux_send` | — | Send a message by `name` or `session/name` |
-| `pmux_broadcast` | — | Broadcast to all online agents |
-| `pmux_artifacts` | — | List shared documents at project, team, and agent levels |
-| `pmux_reserve` | claim, release, list | Reserve files/directories to prevent conflicts |
-| `pmux_task` | add, list, assign, pick, done, drop, block | Manage the team task backlog |
+| Tool | Actions | Purpose |
+|------|---------|---------|
+| `pmux_role` | add, list, remove | Define roles with instructions |
+| `pmux_list` | — | List online agents |
+| `pmux_send` | — | Send message to an agent |
+| `pmux_broadcast` | — | Broadcast to all agents |
+| `pmux_artifacts` | — | List shared documents |
+| `pmux_reserve` | claim, release, list | File/directory reservations |
+| `pmux_task` | add, list, assign, pick, done, drop, block | Task backlog management |
+| `pmux_journal` | add, list | Record decisions and learnings |
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/pmux` | Show agent status (use `/pmux all` for cross-session) |
-| `/pmux_register <role>` | Register this agent with a defined role |
+| Command | Purpose |
+|---------|---------|
+| `/pmux` | Show agent status |
+| `/pmux_register` | Create new agent (interactive) |
+| `/pmux_login` | Resume existing agent |
 
-## Launcher Commands
+## Agent Addressing
 
-```bash
-pmux                                          # Quick start in current directory
-pmux --model <model>                          # Quick start with default model
-pmux --session <name>                         # Quick start with custom session name
-pmux start <session> <name:dir[:role]> ...    # Start with explicit agents
-pmux start --config <file.json>               # Start from JSON config file
-pmux stop  <session>                          # Stop all agents and kill session
-pmux list  [session]                          # Show session info (or list all sessions)
-pmux attach <session>                         # Attach to the tmux session
-```
-
-## Environment Variables
-
-Set by the launcher (or manually):
-
-| Variable | Purpose | Example |
-|----------|---------|---------|
-| `PMUX_SESSION` | Session name / registry namespace | `myproject` |
-| `PMUX_AGENT` | Agent name (unique within session) | `frontend` |
-| `PMUX_ROLE_NAME` | Role to auto-register with | `frontend` |
-| `PMUX_MODEL` | Default model for the agent | `claude-sonnet-4` |
-
-If `PMUX_SESSION` is not set, the extension auto-detects from the tmux session name.
-
-## Requirements
-
-- **Node.js 24+** (for native TypeScript support in the CLI)
-- **Pi** (the coding agent)
-- **tmux** (optional — enables visual enhancements like pane titles and window names)
-
-No other dependencies. No Python, no npm install.
-
-## Project Structure
-
-```
-pmux/
-├── package.json             # type: module
-├── README.md
-├── docs/
-│   ├── design.md            # Full design document
-│   └── architecture.md      # Architecture overview
-├── lib/
-│   └── cli.ts               # CLI implementation (TypeScript)
-├── extension/               # Pi extension
-│   ├── package.json
-│   ├── index.ts             # Extension: lifecycle, tools, commands, event handlers
-│   ├── registry.ts          # Agent registry, roles, and session config
-│   ├── messaging.ts         # File-based inbox messaging (crash-safe)
-│   ├── reservations.ts      # File/directory reservation system
-│   ├── backlog.ts           # Task backlog management
-│   └── tmux.ts              # tmux detection (optional visual enhancements)
-├── bin/
-│   └── pmux                 # 3-line bash shim → lib/cli.ts
-└── examples/
-    └── pmux.json            # Example config with roles and model
-```
+| Format | Scope | Example |
+|--------|-------|---------|
+| `name` | Same session | `"Negin"` |
+| `session/name` | Cross-session | `"myproject/Negin"` |
 
 ## Session Files
 
-Each session stores its state in `~/.pmux/sessions/<session>/`:
+```
+~/.pmux/sessions/<session>/
+├── agents.json           # Agent registry (UUID-keyed)
+├── roles.json            # Role definitions
+├── config.json           # Session config
+├── backlog.json          # Task backlog
+├── reservations.json     # File reservations
+├── journal.jsonl         # Decisions & learnings log
+├── messages.log          # Message history
+├── inbox/
+│   └── <agent-uuid>/     # Per-agent message inbox
+└── artifacts/
+    ├── project/           # Shared across all agents
+    │   └── CONTEXT.md     # Auto-injected into prompts
+    ├── teams/<team>/      # Shared within team
+    │   └── CONTEXT.md     # Auto-injected for team members
+    └── agents/<uuid>/     # Private per-agent space
+```
 
-| File / Directory | Purpose |
-|------------------|---------|
-| `agents.json` | Live agent registry (auto-managed) |
-| `roles.json` | Role definitions (name + instructions) |
-| `config.json` | Session config (default model, etc.) |
-| `reservations.json` | Active file/directory reservations |
-| `backlog.json` | Task backlog (ordered array, priority by position) |
-| `messages.log` | Message history (JSONL) |
-| `inbox/<agentId>/` | Per-agent message inbox (crash-safe delivery) |
-| `artifacts/` | Shared documents (project, team, agent levels) |
+## Key Features
 
-## Documentation
+- **Terminal agnostic** — works in any terminal, any environment
+- **UUID identity** — agents persist across restarts (`/pmux_login`)
+- **Crash-safe messaging** — messages survive crashes, delivered on reconnect
+- **File reservations** — claim files before editing, prevent conflicts
+- **Task backlog** — assign, pick, done with auto file reservation
+- **Shared journal** — decisions and learnings in every agent's prompt
+- **Three-tier artifacts** — project, team, and private document sharing
+- **CONTEXT.md injection** — project and team context auto-loaded into prompts
+- **Zero dependencies** — just Node.js and Pi
 
-- [Design Document](docs/design.md) — Full design rationale and protocol details
-- [Architecture](docs/architecture.md) — Component overview and data flow
+## Requirements
+
+- **Pi** (coding agent)
+- **Node.js 22+**
 
 ## License
 

@@ -1,12 +1,9 @@
 {
   "name": "pmux",
-  "version": "0.1.0",
-  "description": "Pi multi-agent coordination via tmux",
+  "version": "0.2.0",
+  "description": "Pi multi-agent coordination — terminal agnostic",
   "type": "module",
   "keywords": ["pi-package"],
-  "bin": {
-    "pmux": "./bin/pmux"
-  },
   "pi": {
     "extensions": ["./extension/index.ts"]
   },

@@ -2,8 +2,7 @@
  * pmux — Pi Multi-Agent Coordination
  *
  * Terminal-agnostic multi-agent coordination for Pi.
- * Communication uses file-based inboxes (no tmux dependency).
- * tmux integration is optional (visual enhancements only).
+ * Communication uses file-based inboxes.
  *
  * Agent lifecycle:
  *   /pmux_register  — create a new agent (UUID, name, team, role)
@@ -77,7 +76,6 @@ import {
   getRecentEntries,
   formatEntry as formatJournalEntry,
 } from "./journal";
-import { detectTmux, setPaneTitle, setWindowName } from "./tmux";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -90,7 +88,6 @@ export default function (pi: ExtensionAPI) {
   let myRoleInstructions: string | undefined;
   let myTeam: string | undefined;
   let mySession: string | undefined;
-  let myPane: string | undefined; // only if tmux
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let inboxWatcher: FSWatcher | undefined;
   let currentCtx: ExtensionContext | undefined;
@@ -111,7 +108,7 @@ export default function (pi: ExtensionAPI) {
     if (!myId || !mySession || !myName) return;
 
     // Mark online
-    await goOnline(mySession, myId, process.pid, myPane);
+    await goOnline(mySession, myId, process.pid);
 
     // Ensure inbox and artifact directories exist
     ensureInbox(mySession, myId);
@@ -160,7 +157,7 @@ export default function (pi: ExtensionAPI) {
     // Persist UUID in pi session (survives /reload)
     pi.appendEntry("pmux-agent", { id: myId, session: mySession });
 
-    // tmux visual enhancements (optional)
+    // Update titles and status widget
     updateTitles(ctx);
     await refreshStatusWidget(ctx);
   }
@@ -177,17 +174,10 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  /** Set tmux pane title and window name (no-op without tmux). */
   function updateTitles(ctx: ExtensionContext): void {
     const name = myName ?? "pi";
-    const paneTitle = myRoleName ? `${name} (${myRoleName})` : name;
-
-    ctx.ui.setTitle(paneTitle);
-
-    if (myPane) {
-      setPaneTitle(myPane, paneTitle);
-      if (myTeam) setWindowName(myPane, myTeam);
-    }
+    const title = myRoleName ? `${name} (${myRoleName})` : name;
+    ctx.ui.setTitle(title);
   }
 
   /** Load role instructions from roles.json. */
@@ -206,9 +196,7 @@ export default function (pi: ExtensionAPI) {
     currentCtx = ctx;
 
     // Determine session name
-    const tmux = await detectTmux();
-    mySession = process.env.PMUX_SESSION || tmux?.session || "default";
-    myPane = tmux?.pane;
+    mySession = process.env.PMUX_SESSION || deriveAgentName(ctx.cwd);
 
     // Ensure session directory exists
     const config = await readSessionConfig(mySession);
@@ -279,7 +267,6 @@ export default function (pi: ExtensionAPI) {
           role: myRole,
           roleName: myRoleName,
           cwd: ctx.cwd,
-          pane: myPane,
           pid: process.pid,
           status: "online",
           registeredAt: new Date().toISOString(),
@@ -1426,7 +1413,6 @@ export default function (pi: ExtensionAPI) {
         role: role.name,
         roleName: role.name,
         cwd: ctx.cwd,
-        pane: myPane,
         pid: process.pid,
         status: "online",
         registeredAt: new Date().toISOString(),
@@ -1491,8 +1477,8 @@ export default function (pi: ExtensionAPI) {
         await loadRoleInstructions(mySession, agent.roleName);
       }
 
-      // Update pane and go online
-      await updateAgent(mySession, myId, { pane: myPane, cwd: ctx.cwd });
+      // Go online
+      await updateAgent(mySession, myId, { cwd: ctx.cwd });
       await startAgent(ctx);
 
       // Check for pending messages
