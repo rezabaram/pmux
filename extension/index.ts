@@ -582,60 +582,74 @@ export default function (pi: ExtensionAPI) {
   // ─ /pmux_register <roleName> — register with a role ──────────
 
   pi.registerCommand("pmux_register", {
-    description: "Register this agent with a defined role: /pmux_register <roleName>",
-    handler: async (args, ctx) => {
+    description: "Register this agent with a name and role (interactive)",
+    handler: async (_args, ctx) => {
       if (!mySession || !myName) {
         ctx.ui.notify("pmux is not active (not running inside tmux)", "warning");
         return;
       }
 
-      const roleName = args.trim();
+      // 1. Check that roles exist
+      const roles = await readRoles(mySession);
+      const roleNames = Object.keys(roles);
+
+      if (roleNames.length === 0) {
+        ctx.ui.notify(
+          "No roles defined yet.\n\nAsk the LLM to create roles first, e.g.:\n" +
+            '> Create a pmux role called \"developer\" with instructions to write clean code.',
+          "warning"
+        );
+        return;
+      }
+
+      // 2. Prompt for agent name
+      const name = await ctx.ui.input("Agent name:", myName);
+      if (!name) {
+        ctx.ui.notify("Registration cancelled.", "info");
+        return;
+      }
+
+      // 3. Pick a role from the list
+      const roleName = await ctx.ui.select("Choose a role:", roleNames);
       if (!roleName) {
-        // List available roles as a hint
-        const roles = await readRoles(mySession);
-        const names = Object.keys(roles);
-        if (names.length === 0) {
-          ctx.ui.notify(
-            "Usage: /pmux_register <roleName>\n\nNo roles defined yet. Ask the LLM to create one with the pmux_role tool.",
-            "warning"
-          );
-        } else {
-          ctx.ui.notify(
-            `Usage: /pmux_register <roleName>\n\nAvailable roles: ${names.join(", ")}`,
-            "info"
-          );
-        }
+        ctx.ui.notify("Registration cancelled.", "info");
         return;
       }
 
-      // Look up the role
-      const role = await getRole(mySession, roleName);
-      if (!role) {
-        const roles = await readRoles(mySession);
-        const names = Object.keys(roles);
-        const hint =
-          names.length > 0
-            ? `Available roles: ${names.join(", ")}`
-            : "No roles defined yet. Ask the LLM to create one with the pmux_role tool.";
-        ctx.ui.notify(`Role "${roleName}" not found.\n${hint}`, "error");
-        return;
+      const role = roles[roleName]!;
+
+      // 4. If name changed, re-register under new name
+      const oldName = myName;
+      if (name !== oldName) {
+        await deregister(mySession, oldName);
+        myName = name;
       }
 
-      // Apply the role
+      // 5. Apply role
       myRoleName = role.name;
       myRole = role.name;
       myRoleInstructions = role.instructions;
 
-      // Update the registry
-      await updateAgent(mySession, myName, {
+      // 6. Update registry
+      const agentInfo: AgentInfo = {
+        name: myName,
+        session: mySession,
         role: role.name,
         roleName: role.name,
-      });
+        cwd: ctx.cwd,
+        pane: myPane!,
+        pid: process.pid,
+        registeredAt: new Date().toISOString(),
+        lastHeartbeat: new Date().toISOString(),
+        status: "idle",
+      };
+      await register(mySession, agentInfo);
 
       await refreshStatusWidget(ctx);
 
       ctx.ui.notify(
-        `Registered as role "${role.name}".\nInstructions will be injected into the system prompt on the next turn.`,
+        `Registered as \"${myName}\" with role \"${role.name}\".\n` +
+          "Role instructions will be injected into the system prompt on the next turn.",
         "info"
       );
     },
