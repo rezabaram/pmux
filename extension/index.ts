@@ -11,7 +11,7 @@
  *   session shutdown — agent goes offline (persists for later login)
  *
  * Tools: pmux_role, pmux_list, pmux_send, pmux_broadcast,
- *         pmux_reserve, pmux_release, pmux_reservations
+ *         pmux_reserve, pmux_task
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -64,6 +64,13 @@ import {
   checkConflict,
   clearStaleReservations,
 } from "./reservations";
+import {
+  type Task,
+  readBacklog,
+  writeBacklog,
+  addTask,
+  nextTaskId,
+} from "./backlog";
 import { detectTmux, setPaneTitle, setWindowName } from "./tmux";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -742,135 +749,466 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "pmux_reserve",
-    label: "Reserve Files",
+    label: "File Reservations",
     description:
-      "Reserve file paths or directory prefixes to prevent conflicts with other agents. " +
-      "Trailing slash = directory prefix (e.g. 'src/auth/'), no slash = exact file. " +
-      "Rejects if another online agent already has an overlapping reservation.",
-    promptSnippet: "Reserve files/directories to prevent conflicts with other agents",
+      "Manage file/directory reservations to prevent conflicts. " +
+      "Actions: claim (reserve paths), release (free paths), list (show all). " +
+      "Trailing slash = directory prefix, no slash = exact file.",
+    promptSnippet: "Manage file reservations — claim, release, list",
     promptGuidelines: [
-      "Use pmux_reserve before editing files that other agents might also be working on.",
-      "Use trailing slash for directories (e.g., 'src/auth/') and no slash for exact files.",
-      "Release reservations with pmux_release when done.",
+      "Use pmux_reserve with action 'claim' before editing files other agents might work on.",
+      "Trailing slash = directory prefix (e.g., 'src/auth/'), no slash = exact file.",
+      "Release reservations with action 'release' when done editing.",
     ],
     parameters: Type.Object({
-      paths: Type.Array(Type.String({ description: "Paths to reserve (trailing slash = directory prefix)" })),
+      action: StringEnum(["claim", "release", "list"] as const),
+      paths: Type.Optional(
+        Type.Array(Type.String({ description: "Paths to claim or release (trailing slash = directory prefix)" }))
+      ),
       reason: Type.Optional(
-        Type.String({ description: "Why you're reserving these paths (shown to other agents)" })
+        Type.String({ description: "Why you're claiming these paths (shown to other agents)" })
       ),
     }),
 
     async execute(_id, params) {
-      if (!mySession || !myId || !myName) {
-        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+      if (!mySession) throw new Error("pmux session not active");
+
+      switch (params.action) {
+        case "claim": {
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!params.paths?.length) throw new Error("Paths are required for claim.");
+
+          const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
+          const onlineIds = online.map((a) => a.id);
+
+          const reserved = await reserve(mySession, params.paths, myId, myName, params.reason, onlineIds);
+
+          const reasonNote = params.reason ? ` (${params.reason})` : "";
+          return {
+            content: [{
+              type: "text",
+              text: `Reserved ${reserved.length} path(s)${reasonNote}:\n${reserved.map((p) => `  ✓ ${p}`).join("\n")}`,
+            }],
+            details: { reserved, reason: params.reason },
+          };
+        }
+
+        case "release": {
+          if (!myId) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!params.paths?.length) throw new Error("Paths are required for release.");
+
+          const released = await release(mySession, params.paths, myId);
+
+          if (released.length === 0) {
+            return {
+              content: [{ type: "text", text: "No matching reservations found to release." }],
+              details: { released: [] },
+            };
+          }
+          return {
+            content: [{
+              type: "text",
+              text: `Released ${released.length} reservation(s):\n${released.map((p) => `  ✓ ${p}`).join("\n")}`,
+            }],
+            details: { released },
+          };
+        }
+
+        case "list": {
+          const reservations = await getReservations(mySession);
+          const entries = Object.entries(reservations);
+
+          if (entries.length === 0) {
+            return {
+              content: [{ type: "text", text: "No active reservations." }],
+              details: { reservations: {} },
+            };
+          }
+
+          const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
+          const onlineIds = new Set(online.map((a) => a.id));
+
+          const now = Date.now();
+          const lines = entries.map(([path, res]) => {
+            const elapsed = now - new Date(res.since).getTime();
+            const duration = formatDuration(elapsed);
+            const reasonStr = res.reason ? ` — ${res.reason}` : "";
+            const stale = !onlineIds.has(res.agentId);
+            const staleStr = stale ? " [stale — agent offline]" : "";
+            const isMe = res.agentId === myId;
+            const marker = isMe ? " (you)" : "";
+            return `  ${path}  →  ${res.agent}${marker}${reasonStr} (${duration})${staleStr}`;
+          });
+
+          return {
+            content: [{ type: "text", text: `Active reservations:\n${lines.join("\n")}` }],
+            details: { reservations },
+          };
+        }
+
+        default:
+          throw new Error(`Unknown action: ${params.action}`);
       }
-
-      // Get online agent IDs for stale reservation handling
-      const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
-      const onlineIds = online.map((a) => a.id);
-
-      const reserved = await reserve(
-        mySession,
-        params.paths,
-        myId,
-        myName,
-        params.reason,
-        onlineIds
-      );
-
-      const reasonNote = params.reason ? ` (${params.reason})` : "";
-      return {
-        content: [{
-          type: "text",
-          text: `Reserved ${reserved.length} path(s)${reasonNote}:\n${reserved.map((p) => `  ✓ ${p}`).join("\n")}`,
-        }],
-        details: { reserved, reason: params.reason },
-      };
     },
   });
 
-  // ─ pmux_release ──────────────────────────────────────────────
+  // ─ pmux_task ─────────────────────────────────────────────────
 
   pi.registerTool({
-    name: "pmux_release",
-    label: "Release Files",
+    name: "pmux_task",
+    label: "Task Backlog",
     description:
-      "Release file reservations you previously made. " +
-      "Only releases reservations held by you.",
-    promptSnippet: "Release your file/directory reservations",
+      "Manage the team task backlog. Actions: add (create task), list (show tasks), " +
+      "assign (delegate to agent), pick (claim/accept task), done (complete), " +
+      "drop (release back to queue), block (mark blocked). " +
+      "Picking a task auto-reserves its files. Done/drop auto-releases them.",
+    promptSnippet: "Manage team task backlog — add, list, assign, pick, done, drop, block",
+    promptGuidelines: [
+      "Use action 'pick' to claim the next available task or accept an assigned task.",
+      "Picking a task auto-reserves its files. Done/drop auto-releases them.",
+      "Use action 'done' with a summary when completing a task.",
+      "Use action 'assign' to delegate tasks — the assignee accepts by picking.",
+    ],
     parameters: Type.Object({
-      paths: Type.Array(Type.String({ description: "Paths to release" })),
+      action: StringEnum(["add", "list", "assign", "pick", "done", "drop", "block"] as const),
+      // add
+      title: Type.Optional(Type.String({ description: "Task title (required for add)" })),
+      description: Type.Optional(Type.String({ description: "Task description or acceptance criteria" })),
+      files: Type.Optional(Type.Array(Type.String({ description: "Related file paths (auto-reserved on pick)" }))),
+      team: Type.Optional(Type.String({ description: "Team name for the task" })),
+      urgent: Type.Optional(Type.Boolean({ description: "If true, prepend to backlog instead of append" })),
+      // assign, pick, done, drop, block
+      id: Type.Optional(Type.String({ description: "Task ID (e.g. TASK-01)" })),
+      to: Type.Optional(Type.String({ description: "Agent name to assign the task to" })),
+      reason: Type.Optional(Type.String({ description: "Reason for blocking, or approach note for pick" })),
+      summary: Type.Optional(Type.String({ description: "Completion summary (for done)" })),
+      // list
+      status: Type.Optional(Type.String({ description: "Filter by status: todo, assigned, in-progress, done, blocked" })),
     }),
 
     async execute(_id, params) {
-      if (!mySession || !myId) {
-        throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+      if (!mySession) throw new Error("pmux session not active");
+
+      switch (params.action) {
+        // ── add ──────────────────────────────────────────────
+        case "add": {
+          if (!myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!params.title) throw new Error("Title is required for add.");
+
+          const now = new Date().toISOString();
+          const task = await addTask(
+            mySession,
+            {
+              title: params.title,
+              description: params.description,
+              status: "todo",
+              team: params.team || myTeam,
+              files: params.files,
+              createdBy: myName,
+              createdAt: now,
+              updatedAt: now,
+            },
+            params.urgent
+          );
+
+          const urgentNote = params.urgent ? " (urgent — top of backlog)" : "";
+          const filesNote = task.files?.length ? `\n  Files: ${task.files.join(", ")}` : "";
+          return {
+            content: [{
+              type: "text",
+              text: `Created ${task.id}: ${task.title}${urgentNote}${filesNote}`,
+            }],
+            details: { task },
+          };
+        }
+
+        // ── list ─────────────────────────────────────────────
+        case "list": {
+          const tasks = await readBacklog(mySession);
+          let filtered = tasks;
+
+          if (params.status) {
+            filtered = filtered.filter((t) => t.status === params.status);
+          }
+          if (params.team) {
+            filtered = filtered.filter((t) => t.team === params.team);
+          }
+
+          if (filtered.length === 0) {
+            const filterNote = params.status ? ` with status "${params.status}"` : "";
+            return {
+              content: [{ type: "text", text: `No tasks found${filterNote}.` }],
+              details: { tasks: [] },
+            };
+          }
+
+          const lines = filtered.map((t, i) => {
+            const pos = tasks.indexOf(t) + 1;
+            const assigneeStr = t.assignee
+              ? t.status === "assigned"
+                ? ` → ${t.assignee} (pending)`
+                : ` — ${t.assignee}`
+              : "";
+            const isMe = t.assigneeId === myId;
+            const meMarker = isMe ? " (you)" : "";
+            const filesStr = t.files?.length ? `\n                              Files: ${t.files.join(", ")}` : "";
+            const blockedStr = t.status === "blocked" && t.blockedReason
+              ? `\n                              Blocked: ${t.blockedReason}` : "";
+            const summaryStr = t.status === "done" && t.summary
+              ? `\n                              Summary: ${t.summary}` : "";
+            const doneTime = t.status === "done" && t.completedAt
+              ? ` (${formatDuration(Date.now() - new Date(t.completedAt).getTime())} ago)` : "";
+
+            return `  #${String(pos).padStart(2)}  ${t.id}  [${t.status}]  ${t.title}${assigneeStr}${meMarker}${doneTime}${filesStr}${blockedStr}${summaryStr}`;
+          });
+
+          return {
+            content: [{ type: "text", text: `Backlog (${filtered.length} task${filtered.length !== 1 ? "s" : ""}):\n\n${lines.join("\n")}` }],
+            details: { tasks: filtered },
+          };
+        }
+
+        // ── assign ───────────────────────────────────────────
+        case "assign": {
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!params.id) throw new Error("Task ID is required for assign.");
+          if (!params.to) throw new Error("Target agent name is required for assign.");
+
+          const tasks = await readBacklog(mySession);
+          const task = tasks.find((t) => t.id === params.id);
+          if (!task) throw new Error(`Task ${params.id} not found.`);
+
+          if (task.status === "in-progress") {
+            throw new Error(
+              `${params.id} is actively being worked on by ${task.assignee}. Ask them to drop it first.`
+            );
+          }
+          if (task.status === "done") {
+            throw new Error(`${params.id} is already done.`);
+          }
+
+          const target = await resolveAgent(params.to, mySession);
+          if (!target) {
+            throw new Error(`Agent "${params.to}" not found.`);
+          }
+
+          task.status = "assigned";
+          task.assignee = target.name;
+          task.assigneeId = target.id;
+          task.updatedAt = new Date().toISOString();
+          await writeBacklog(mySession, tasks);
+
+          // Send notification to assignee
+          const filesStr = task.files?.length ? `\nFiles: ${task.files.join(", ")}` : "";
+          const descStr = task.description ? `\n${task.description}` : "";
+          const notification =
+            `📋 Task assigned to you:\n${task.id}: ${task.title}${descStr}${filesStr}` +
+            `\n\n→ Use pmux_task with action "pick" and id "${task.id}" to accept and start working`;
+
+          const msg: InboxMessage = {
+            id: newMessageId(),
+            from: myId,
+            fromName: myName,
+            fromRole: myRoleName,
+            fromSession: mySession,
+            timestamp: new Date().toISOString(),
+            message: notification,
+          };
+          sendToInbox(target.session, target.id, msg);
+
+          const targetAddr = formatAddress(target.session, target.name);
+          return {
+            content: [{
+              type: "text",
+              text: `Assigned ${task.id} to ${target.name}. Notification sent to ${targetAddr}.`,
+            }],
+            details: { task, notifiedAgent: targetAddr },
+          };
+        }
+
+        // ── pick ─────────────────────────────────────────────
+        case "pick": {
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+
+          const tasks = await readBacklog(mySession);
+          let task: Task | undefined;
+
+          if (params.id) {
+            task = tasks.find((t) => t.id === params.id);
+            if (!task) throw new Error(`Task ${params.id} not found.`);
+
+            if (task.status === "assigned" && task.assigneeId !== myId) {
+              throw new Error(
+                `${params.id} is assigned to ${task.assignee}, waiting for their response.`
+              );
+            }
+            if (task.status === "in-progress") {
+              throw new Error(
+                `${params.id} is already in progress${task.assignee ? ` by ${task.assignee}` : ""}.`
+              );
+            }
+            if (task.status === "done") {
+              throw new Error(`${params.id} is already done.`);
+            }
+          } else {
+            // Auto-pick: first "todo" task (skip "assigned" — those are spoken for)
+            task = tasks.find((t) => t.status === "todo");
+            if (!task) {
+              throw new Error(
+                "No tasks available to pick. All tasks are assigned, in progress, blocked, or done."
+              );
+            }
+          }
+
+          // Claim the task
+          task.status = "in-progress";
+          task.assignee = myName;
+          task.assigneeId = myId;
+          task.blockedReason = undefined;
+          task.updatedAt = new Date().toISOString();
+          await writeBacklog(mySession, tasks);
+
+          // Auto-reserve files (partial success — Option B)
+          const reserved: string[] = [];
+          const conflicts: Array<{ path: string; detail: string }> = [];
+
+          if (task.files?.length) {
+            const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
+            const onlineIds = online.map((a) => a.id);
+            const reserveReason = `${task.id}: ${task.title}`;
+
+            for (const file of task.files) {
+              try {
+                await reserve(mySession, [file], myId, myName, reserveReason, onlineIds);
+                reserved.push(file);
+              } catch (err) {
+                conflicts.push({
+                  path: file,
+                  detail: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+          }
+
+          // Build response
+          let text = `✓ Picked ${task.id}: ${task.title}`;
+          if (params.reason) text += `\n  Approach: ${params.reason}`;
+          if (reserved.length > 0) text += `\n  Reserved: ${reserved.join(", ")}`;
+          if (conflicts.length > 0) {
+            for (const c of conflicts) {
+              text += `\n  ⚠️ Could not reserve: ${c.path} — ${c.detail}`;
+            }
+            text += `\n  → Consider coordinating via pmux_send.`;
+          }
+
+          return {
+            content: [{ type: "text", text }],
+            details: { task, reserved, conflicts },
+          };
+        }
+
+        // ── done ─────────────────────────────────────────────
+        case "done": {
+          if (!myId) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!params.id) throw new Error("Task ID is required for done.");
+
+          const tasks = await readBacklog(mySession);
+          const task = tasks.find((t) => t.id === params.id);
+          if (!task) throw new Error(`Task ${params.id} not found.`);
+          if (task.status === "done") throw new Error(`${params.id} is already done.`);
+
+          if (task.assigneeId && task.assigneeId !== myId) {
+            throw new Error(
+              `${params.id} is assigned to ${task.assignee}. Only the assignee can mark it done.`
+            );
+          }
+
+          task.status = "done";
+          task.completedAt = new Date().toISOString();
+          task.updatedAt = new Date().toISOString();
+          if (params.summary) task.summary = params.summary;
+          await writeBacklog(mySession, tasks);
+
+          // Auto-release file reservations
+          let released: string[] = [];
+          if (task.files?.length) {
+            released = await release(mySession, task.files, myId);
+          }
+
+          let text = `✓ Completed ${task.id}: ${task.title}`;
+          if (params.summary) text += `\n  Summary: ${params.summary}`;
+          if (released.length > 0) text += `\n  Released: ${released.join(", ")}`;
+
+          return {
+            content: [{ type: "text", text }],
+            details: { task, released },
+          };
+        }
+
+        // ── drop ─────────────────────────────────────────────
+        case "drop": {
+          if (!myId) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!params.id) throw new Error("Task ID is required for drop.");
+
+          const tasks = await readBacklog(mySession);
+          const task = tasks.find((t) => t.id === params.id);
+          if (!task) throw new Error(`Task ${params.id} not found.`);
+          if (task.status === "done") throw new Error(`${params.id} is already done.`);
+          if (task.status === "todo") throw new Error(`${params.id} is not assigned to anyone.`);
+
+          if (task.assigneeId && task.assigneeId !== myId) {
+            throw new Error(
+              `${params.id} is assigned to ${task.assignee}. Only the assignee can drop it.`
+            );
+          }
+
+          task.status = "todo";
+          task.assignee = undefined;
+          task.assigneeId = undefined;
+          task.blockedReason = undefined;
+          task.updatedAt = new Date().toISOString();
+          await writeBacklog(mySession, tasks);
+
+          // Auto-release file reservations
+          let released: string[] = [];
+          if (task.files?.length) {
+            released = await release(mySession, task.files, myId);
+          }
+
+          let text = `✓ Dropped ${task.id}: ${task.title} — back in queue`;
+          if (released.length > 0) text += `\n  Released: ${released.join(", ")}`;
+
+          return {
+            content: [{ type: "text", text }],
+            details: { task, released },
+          };
+        }
+
+        // ── block ────────────────────────────────────────────
+        case "block": {
+          if (!myId) throw new Error("Not registered. Use /pmux_register or /pmux_login first.");
+          if (!params.id) throw new Error("Task ID is required for block.");
+          if (!params.reason) throw new Error("Reason is required for block.");
+
+          const tasks = await readBacklog(mySession);
+          const task = tasks.find((t) => t.id === params.id);
+          if (!task) throw new Error(`Task ${params.id} not found.`);
+          if (task.status === "done") throw new Error(`${params.id} is already done.`);
+
+          task.status = "blocked";
+          task.blockedReason = params.reason;
+          task.updatedAt = new Date().toISOString();
+          await writeBacklog(mySession, tasks);
+
+          return {
+            content: [{ type: "text", text: `⚠️ ${task.id} blocked: ${params.reason}` }],
+            details: { task },
+          };
+        }
+
+        default:
+          throw new Error(`Unknown action: ${params.action}`);
       }
-
-      const released = await release(mySession, params.paths, myId);
-
-      if (released.length === 0) {
-        return {
-          content: [{ type: "text", text: "No matching reservations found to release." }],
-          details: { released: [] },
-        };
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: `Released ${released.length} reservation(s):\n${released.map((p) => `  ✓ ${p}`).join("\n")}`,
-        }],
-        details: { released },
-      };
-    },
-  });
-
-  // ─ pmux_reservations ─────────────────────────────────────────
-
-  pi.registerTool({
-    name: "pmux_reservations",
-    label: "List Reservations",
-    description:
-      "List all current file reservations with agent name, reason, and duration.",
-    promptSnippet: "List all file/directory reservations across agents",
-    parameters: Type.Object({}),
-
-    async execute() {
-      if (!mySession) {
-        throw new Error("pmux session not active");
-      }
-
-      const reservations = await getReservations(mySession);
-      const entries = Object.entries(reservations);
-
-      if (entries.length === 0) {
-        return {
-          content: [{ type: "text", text: "No active reservations." }],
-          details: { reservations: {} },
-        };
-      }
-
-      // Get online agents for stale detection
-      const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
-      const onlineIds = new Set(online.map((a) => a.id));
-
-      const now = Date.now();
-      const lines = entries.map(([path, res]) => {
-        const elapsed = now - new Date(res.since).getTime();
-        const duration = formatDuration(elapsed);
-        const reasonStr = res.reason ? ` — ${res.reason}` : "";
-        const stale = !onlineIds.has(res.agentId);
-        const staleStr = stale ? " [stale — agent offline]" : "";
-        const isMe = res.agentId === myId;
-        const marker = isMe ? " (you)" : "";
-        return `  ${path}  →  ${res.agent}${marker}${reasonStr} (${duration})${staleStr}`;
-      });
-
-      return {
-        content: [{ type: "text", text: `Active reservations:\n${lines.join("\n")}` }],
-        details: { reservations },
-      };
     },
   });
 
