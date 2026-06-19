@@ -845,7 +845,7 @@ export default function (pi: ExtensionAPI) {
         const icon = a.name === myName ? "◆" : a.status === "working" ? "●" : "○";
         const color: "accent" | "warning" | "success" =
           a.name === myName ? "accent" : a.status === "working" ? "warning" : "success";
-        const label = a.roleName || a.name;
+        const label = [a.team, a.roleName, a.name].filter(Boolean).join(":");
         return theme.fg(color, `${icon} ${label}`);
       });
 
