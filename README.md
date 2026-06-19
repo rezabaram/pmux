@@ -1,8 +1,8 @@
-# pmux — Pi Multi-Agent Coordination via tmux
+# pmux — Pi Multi-Agent Coordination
 
-Run multiple [Pi](https://github.com/earendil-works/pi) agents in tmux panes. They discover each other automatically and communicate by typing messages into each other's terminals — even across different tmux sessions.
+Run multiple [Pi](https://github.com/earendil-works/pi) agents that discover each other automatically and communicate via file-based inboxes — crash-safe, terminal-agnostic, with built-in file reservations and a task backlog.
 
-No servers, no daemons, no extra dependencies — just tmux, Node.js, and a Pi extension.
+No servers, no daemons, no extra dependencies. tmux integration is optional (visual enhancements only).
 
 ## Install
 
@@ -72,9 +72,9 @@ See [examples/pmux.json](examples/pmux.json) for the format (roles, model, agent
 2. **Roles** define instructions that shape agent behavior (created via tool or config)
 3. **Agents** register with roles using `/pmux_register <roleName>` (or auto-assigned from config)
 4. The **Pi extension** auto-registers agents in a shared JSON registry
-5. Agents use custom tools (`pmux_list`, `pmux_send`, `pmux_broadcast`) to talk
-6. Messages are delivered via `tmux send-keys` — they appear as user prompts
-7. **Cross-session**: agents in different tmux sessions can discover and message each other
+5. Agents use tools to communicate (`pmux_send`, `pmux_broadcast`), coordinate files (`pmux_reserve`), and manage work (`pmux_task`)
+6. Messages are delivered via crash-safe file-based inboxes — no tmux dependency
+7. **Cross-session**: agents in different sessions can discover and message each other
 
 ## Agent Addressing
 
@@ -132,12 +132,15 @@ Per-agent model override is supported in the config file:
 
 ## Agent Tools
 
-| Tool | Description |
-|------|-------------|
-| `pmux_role` | Add, list, or remove role definitions for the session |
-| `pmux_list` | List online agents — same session or all sessions (`allSessions=true`) |
-| `pmux_send` | Send a message by `name` (same session) or `session/name` (cross-session) |
-| `pmux_broadcast` | Broadcast to agents — same session or all sessions (`allSessions=true`) |
+| Tool | Actions | Description |
+|------|---------|-------------|
+| `pmux_role` | add, list, remove | Manage role definitions for the session |
+| `pmux_list` | — | List online agents (same session or all sessions) |
+| `pmux_send` | — | Send a message by `name` or `session/name` |
+| `pmux_broadcast` | — | Broadcast to all online agents |
+| `pmux_artifacts` | — | List shared documents at project, team, and agent levels |
+| `pmux_reserve` | claim, release, list | Reserve files/directories to prevent conflicts |
+| `pmux_task` | add, list, assign, pick, done, drop, block | Manage the team task backlog |
 
 ## Commands
 
@@ -175,8 +178,8 @@ If `PMUX_SESSION` is not set, the extension auto-detects from the tmux session n
 ## Requirements
 
 - **Node.js 24+** (for native TypeScript support in the CLI)
-- **tmux** (the transport layer)
 - **Pi** (the coding agent)
+- **tmux** (optional — enables visual enhancements like pane titles and window names)
 
 No other dependencies. No Python, no npm install.
 
@@ -191,11 +194,14 @@ pmux/
 │   └── architecture.md      # Architecture overview
 ├── lib/
 │   └── cli.ts               # CLI implementation (TypeScript)
-├── extension/               # Pi extension (symlink to ~/.pi/agent/extensions/pmux)
+├── extension/               # Pi extension
 │   ├── package.json
-│   ├── index.ts             # Extension: lifecycle, tools, roles, commands
-│   ├── registry.ts          # Registry, roles, and session config operations
-│   └── tmux.ts              # tmux detection & send-keys helpers
+│   ├── index.ts             # Extension: lifecycle, tools, commands, event handlers
+│   ├── registry.ts          # Agent registry, roles, and session config
+│   ├── messaging.ts         # File-based inbox messaging (crash-safe)
+│   ├── reservations.ts      # File/directory reservation system
+│   ├── backlog.ts           # Task backlog management
+│   └── tmux.ts              # tmux detection (optional visual enhancements)
 ├── bin/
 │   └── pmux                 # 3-line bash shim → lib/cli.ts
 └── examples/
@@ -206,11 +212,16 @@ pmux/
 
 Each session stores its state in `~/.pmux/sessions/<session>/`:
 
-| File | Purpose |
-|------|---------|
+| File / Directory | Purpose |
+|------------------|---------|
 | `agents.json` | Live agent registry (auto-managed) |
 | `roles.json` | Role definitions (name + instructions) |
 | `config.json` | Session config (default model, etc.) |
+| `reservations.json` | Active file/directory reservations |
+| `backlog.json` | Task backlog (ordered array, priority by position) |
+| `messages.log` | Message history (JSONL) |
+| `inbox/<agentId>/` | Per-agent message inbox (crash-safe delivery) |
+| `artifacts/` | Shared documents (project, team, agent levels) |
 
 ## Documentation
 
