@@ -45,15 +45,20 @@ interface AgentInfo {
   status: string;
 }
 
+interface AgentConfig {
+  dir: string;
+  role?: string;
+  model?: string;
+}
+
 interface ConfigFile {
   session: string;
   model?: string;
   layout?: string;
   roles?: Record<string, { instructions: string }>;
-  agents: Record<string, {
-    dir: string;
-    role?: string;
-    model?: string;
+  agents?: Record<string, AgentConfig>;
+  teams?: Record<string, {
+    agents: Record<string, AgentConfig>;
   }>;
 }
 
@@ -327,17 +332,44 @@ function cmdStartConfig(args: string[]): void {
   }
 
   if (!cfg.session) die("missing 'session' in config file");
-  if (!cfg.agents || Object.keys(cfg.agents).length === 0) die("no agents defined in config file");
 
   const session = cfg.session;
   const model = cfg.model ?? "";
   const layout = cfg.layout ?? "tiled";
 
-  // Validate agent roles reference defined roles
+  // Build team → agents mapping from either format
+  const teamMap = new Map<string, Array<{ name: string; dir: string; role?: string; model?: string }>>();
+  const configDir = dirname(resolve(configFile));
+
+  if (cfg.teams) {
+    for (const [teamName, teamConf] of Object.entries(cfg.teams)) {
+      const agents = Object.entries(teamConf.agents).map(([name, conf]) => ({
+        name,
+        dir: resolve(configDir, conf.dir),
+        role: conf.role,
+        model: conf.model,
+      }));
+      teamMap.set(teamName, agents);
+    }
+  } else if (cfg.agents) {
+    const agents = Object.entries(cfg.agents).map(([name, conf]) => ({
+      name,
+      dir: resolve(configDir, conf.dir),
+      role: conf.role,
+      model: conf.model,
+    }));
+    teamMap.set("", agents);
+  } else {
+    die("no agents or teams defined in config file");
+  }
+
+  // Validate roles
   if (cfg.roles) {
-    for (const [aname, aconf] of Object.entries(cfg.agents)) {
-      if (aconf.role && !cfg.roles[aconf.role]) {
-        die(`agent '${aname}' references undefined role: '${aconf.role}'`);
+    for (const [, agents] of teamMap) {
+      for (const a of agents) {
+        if (a.role && !cfg.roles[a.role]) {
+          die(`agent '${a.name}' references undefined role: '${a.role}'`);
+        }
       }
     }
   }
@@ -348,59 +380,84 @@ function cmdStartConfig(args: string[]): void {
 
   console.log(`Starting pmux session '${session}' from config: ${configFile}`);
 
-  // Build roles map
+  // Build and write roles
   const roles: Record<string, RoleDefinition> = {};
   if (cfg.roles) {
     for (const [name, def] of Object.entries(cfg.roles)) {
       roles[name] = { name, instructions: def.instructions };
     }
   }
-
   writeSessionFiles(session, model || undefined, Object.keys(roles).length > 0 ? roles : undefined);
 
-  // Resolve agent dirs relative to config file
-  const configDir = dirname(resolve(configFile));
-  const agentEntries = Object.entries(cfg.agents);
+  // Create tmux session and windows per team
+  let isFirstTeam = true;
 
-  // Create tmux session with first agent
-  const firstDir = resolve(configDir, agentEntries[0]![1].dir);
-  execSync(`tmux new-session -d -s ${shellEscape(session)} -c ${shellEscape(firstDir)}`, {
-    stdio: "pipe",
-  });
+  for (const [teamName, agents] of teamMap) {
+    if (agents.length === 0) continue;
 
-  for (let i = 0; i < agentEntries.length; i++) {
-    const [aname, aconf] = agentEntries[i]!;
-    const absDir = resolve(configDir, aconf.dir);
-    const agentModel = aconf.model ?? model;
-
-    if (i > 0) {
+    if (isFirstTeam) {
+      // Create session with first team's first agent
       execSync(
-        `tmux split-window -t ${shellEscape(session)} -c ${shellEscape(absDir)} -h`,
+        `tmux new-session -d -s ${shellEscape(session)} -c ${shellEscape(agents[0]!.dir)}`,
         { stdio: "pipe" }
       );
-      exec(`tmux select-layout -t ${shellEscape(session)} ${shellEscape(layout)}`);
+      if (teamName) {
+        exec(`tmux rename-window -t ${shellEscape(session)} ${shellEscape(teamName)}`);
+      }
+      isFirstTeam = false;
+    } else {
+      // New window for each team
+      execSync(
+        `tmux new-window -d -t ${shellEscape(session)} -n ${shellEscape(teamName)} -c ${shellEscape(agents[0]!.dir)}`,
+        { stdio: "pipe" }
+      );
     }
 
-    const envParts = [
-      `PMUX_SESSION=${shellEscape(session)}`,
-      `PMUX_AGENT=${shellEscape(aname)}`,
-    ];
-    if (agentModel) envParts.push(`PMUX_MODEL=${shellEscape(agentModel)}`);
-    if (aconf.role) envParts.push(`PMUX_ROLE_NAME=${shellEscape(aconf.role)}`);
+    // Window target for this team
+    const winTarget = teamName
+      ? `${session}:${teamName}`
+      : `${session}`;
 
-    const pane = `${session}:0.${i}`;
-    execSync(
-      `tmux send-keys -t ${shellEscape(pane)} ` +
-        `${shellEscape(`export ${envParts.join(" ")}; clear; pi`)} Enter`,
-      { stdio: "pipe" }
-    );
+    if (teamName) {
+      console.log(`\n  Team: ${teamName}`);
+    }
 
-    const roleLabel = aconf.role ? ` (role: ${aconf.role})` : "";
-    const modelLabel = aconf.model ? ` (model: ${aconf.model})` : "";
-    console.log(`  ✓ ${aname} → ${absDir}${roleLabel}${modelLabel}`);
+    for (let i = 0; i < agents.length; i++) {
+      const agent = agents[i]!;
+
+      if (i > 0) {
+        execSync(
+          `tmux split-window -t ${shellEscape(winTarget)} -c ${shellEscape(agent.dir)} -h`,
+          { stdio: "pipe" }
+        );
+        exec(`tmux select-layout -t ${shellEscape(winTarget)} ${shellEscape(layout)}`);
+      }
+
+      // Build env vars
+      const agentModel = agent.model ?? model;
+      const envParts = [
+        `PMUX_SESSION=${shellEscape(session)}`,
+        `PMUX_AGENT=${shellEscape(agent.name)}`,
+      ];
+      if (agentModel) envParts.push(`PMUX_MODEL=${shellEscape(agentModel)}`);
+      if (agent.role) envParts.push(`PMUX_ROLE_NAME=${shellEscape(agent.role)}`);
+      if (teamName) envParts.push(`PMUX_TEAM=${shellEscape(teamName)}`);
+
+      // Target the pane within this team's window
+      const paneTarget = `${winTarget}.${i}`;
+      execSync(
+        `tmux send-keys -t ${shellEscape(paneTarget)} ` +
+          `${shellEscape(`export ${envParts.join(" ")}; clear; pi`)} Enter`,
+        { stdio: "pipe" }
+      );
+
+      const roleLabel = agent.role ? ` (role: ${agent.role})` : "";
+      const modelLabel = agent.model ? ` (model: ${agent.model})` : "";
+      console.log(`    ✓ ${agent.name} → ${agent.dir}${roleLabel}${modelLabel}`);
+    }
+
+    exec(`tmux select-layout -t ${shellEscape(winTarget)} ${shellEscape(layout)}`);
   }
-
-  exec(`tmux select-layout -t ${shellEscape(session)} ${shellEscape(layout)}`);
 
   console.log(`\nSession '${session}' is ready.`);
   console.log(`Attach with: pmux attach ${session}`);

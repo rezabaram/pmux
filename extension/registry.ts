@@ -23,6 +23,7 @@ import { randomBytes } from "node:crypto";
 export interface AgentInfo {
   name: string;
   session: string; // pmux/tmux session this agent belongs to
+  team?: string; // team name (= tmux window name)
   role: string; // human-readable role description
   roleName?: string; // references a RoleDefinition name (if registered via role)
   cwd: string;

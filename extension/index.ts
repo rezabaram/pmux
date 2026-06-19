@@ -48,6 +48,7 @@ export default function (pi: ExtensionAPI) {
   let myRole: string | undefined; // human-readable description
   let myRoleName: string | undefined; // references a RoleDefinition
   let myRoleInstructions: string | undefined; // loaded from role definition
+  let myTeam: string | undefined; // team name (= tmux window name)
   let mySession: string | undefined;
   let myPane: string | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -89,6 +90,7 @@ export default function (pi: ExtensionAPI) {
       if (existing) {
         myName = existing.name;
         myRole = existing.role;
+        myTeam = existing.team;
         if (existing.roleName) {
           const role = await getRole(mySession, existing.roleName);
           if (role) {
@@ -111,10 +113,16 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    // If PMUX_TEAM is set (from launcher with config), use it
+    if (process.env.PMUX_TEAM) {
+      myTeam = process.env.PMUX_TEAM;
+    }
+
     // Register in shared registry
     const agentInfo: AgentInfo = {
       name: myName,
       session: mySession,
+      team: myTeam,
       role: myRole,
       roleName: myRoleName,
       cwd: ctx.cwd,
@@ -415,7 +423,8 @@ export default function (pi: ExtensionAPI) {
           const marker = isMe ? " (you)" : "";
           const addr = formatAddress(session, a.name);
           const roleLabel = a.roleName ? `role:${a.roleName}` : a.role;
-          return `  - ${addr}${marker} [${a.status}]: ${roleLabel} (cwd: ${a.cwd})`;
+          const teamLabel = a.team ? ` team:${a.team}` : "";
+          return `  - ${addr}${marker} [${a.status}]:${teamLabel} ${roleLabel} (cwd: ${a.cwd})`;
         });
         sections.push(`${header}\n${lines.join("\n")}`);
       }
@@ -603,7 +612,7 @@ export default function (pi: ExtensionAPI) {
   // ─ /pmux_register <roleName> — register with a role ──────────
 
   pi.registerCommand("pmux_register", {
-    description: "Register this agent with a name and role (interactive)",
+    description: "Register this agent with a name, team, and role (interactive)",
     handler: async (_args, ctx) => {
       if (!mySession || !myName) {
         ctx.ui.notify("pmux is not active (not running inside tmux)", "warning");
@@ -630,7 +639,47 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // 3. Pick a role from the list
+      // 3. Prompt for team
+      let team: string | undefined;
+
+      // Collect existing teams from registry
+      const registry = await readRegistry(mySession);
+      const existingTeams = [
+        ...new Set(
+          Object.values(registry)
+            .map((a) => a.team)
+            .filter((t): t is string => !!t)
+        ),
+      ];
+
+      if (existingTeams.length > 0) {
+        const CREATE_NEW = "+ Create new team";
+        const teamChoice = await ctx.ui.select(
+          "Team:",
+          [...existingTeams, CREATE_NEW]
+        );
+        if (!teamChoice) {
+          ctx.ui.notify("Registration cancelled.", "info");
+          return;
+        }
+        if (teamChoice === CREATE_NEW) {
+          team = await ctx.ui.input("New team name:");
+          if (!team) {
+            ctx.ui.notify("Registration cancelled.", "info");
+            return;
+          }
+        } else {
+          team = teamChoice;
+        }
+      } else {
+        team = await ctx.ui.input("Team name:", myTeam);
+        if (!team) {
+          ctx.ui.notify("Registration cancelled.", "info");
+          return;
+        }
+      }
+
+      // 4. Pick a role from the list
       const roleName = await ctx.ui.select("Choose a role:", roleNames);
       if (!roleName) {
         ctx.ui.notify("Registration cancelled.", "info");
@@ -639,22 +688,29 @@ export default function (pi: ExtensionAPI) {
 
       const role = roles[roleName]!;
 
-      // 4. If name changed, re-register under new name
+      // 5. If name changed, re-register under new name
       const oldName = myName;
       if (name !== oldName) {
         await deregister(mySession, oldName);
         myName = name;
       }
 
-      // 5. Apply role
+      // 6. Apply team — rename tmux window
+      myTeam = team;
+      if (myPane) {
+        pi.exec("tmux", ["rename-window", "-t", myPane, team]).catch(() => {});
+      }
+
+      // 7. Apply role
       myRoleName = role.name;
       myRole = role.name;
       myRoleInstructions = role.instructions;
 
-      // 6. Update registry
+      // 8. Update registry
       const agentInfo: AgentInfo = {
         name: myName,
         session: mySession,
+        team: myTeam,
         role: role.name,
         roleName: role.name,
         cwd: ctx.cwd,
@@ -670,7 +726,7 @@ export default function (pi: ExtensionAPI) {
       await refreshStatusWidget(ctx);
 
       ctx.ui.notify(
-        `Registered as \"${myName}\" with role \"${role.name}\".\n` +
+        `Registered as \"${myName}\" in team \"${team}\" with role \"${role.name}\".\n` +
           "Role instructions will be injected into the system prompt on the next turn.",
         "info"
       );
@@ -691,12 +747,17 @@ export default function (pi: ExtensionAPI) {
     const name = myName ?? "pi";
     const paneTitle = myRoleName ? `${name} (${myRoleName})` : name;
 
-    // Terminal title → per-pane (tmux shows active pane's title)
+    // Terminal title → per-pane
     ctx.ui.setTitle(paneTitle);
 
-    // Tmux pane title → per-pane (visible with pane-border-status)
     if (myPane) {
+      // Pane title → per-pane (visible with pane-border-status)
       pi.exec("tmux", ["select-pane", "-t", myPane, "-T", paneTitle]).catch(() => {});
+
+      // Window name → team (shared by all panes in the window)
+      if (myTeam) {
+        pi.exec("tmux", ["rename-window", "-t", myPane, myTeam]).catch(() => {});
+      }
     }
   }
 

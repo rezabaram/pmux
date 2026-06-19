@@ -4,30 +4,34 @@
   "layout": "tiled",
 
   "roles": {
-    "frontend": {
-      "instructions": "You are a React frontend developer.\nFocus on UI components, pages, styling, and client-side logic.\nUse TypeScript and follow the project's component patterns.\nCoordinate with the backend agent for API integration."
+    "developer": {
+      "instructions": "You are a software developer. Focus on writing clean, well-structured code. Follow best practices for the project's language and framework."
     },
-    "backend": {
-      "instructions": "You are a Node.js API developer.\nBuild REST endpoints, middleware, business logic, and database queries.\nUse TypeScript and Express/Fastify conventions.\nCoordinate with the frontend agent on API contracts."
+    "designer": {
+      "instructions": "You are a UI/UX designer. Focus on component design, styling, accessibility, and user experience."
     },
     "devops": {
-      "instructions": "You are a DevOps engineer.\nManage Docker configurations, CI/CD pipelines, deployment scripts,\nand infrastructure as code. Monitor for security and performance issues."
+      "instructions": "You are a DevOps engineer. Manage Docker, CI/CD pipelines, deployment scripts, and infrastructure."
     }
   },
 
-  "agents": {
+  "teams": {
     "frontend": {
-      "dir": "./frontend",
-      "role": "frontend"
+      "agents": {
+        "ui": { "dir": "./frontend", "role": "developer" },
+        "styling": { "dir": "./frontend", "role": "designer" }
+      }
     },
     "backend": {
-      "dir": "./backend",
-      "role": "backend"
+      "agents": {
+        "api": { "dir": "./backend", "role": "developer" },
+        "db": { "dir": "./backend", "role": "developer" }
+      }
     },
-    "devops": {
-      "dir": "./infra",
-      "role": "devops",
-      "model": "claude-opus-4"
+    "infra": {
+      "agents": {
+        "devops": { "dir": "./infra", "role": "devops" }
+      }
     }
   }
 }
