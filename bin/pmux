@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 # pmux — thin wrapper that runs the TypeScript CLI
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 exec node "$SCRIPT_DIR/../lib/cli.ts" "$@"
