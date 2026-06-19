@@ -1,0 +1,10 @@
+{
+  "name": "pmux",
+  "version": "0.1.0",
+  "description": "Pi multi-agent coordination via tmux",
+  "type": "module",
+  "bin": {
+    "pmux": "./bin/pmux"
+  },
+  "license": "MIT"
+}

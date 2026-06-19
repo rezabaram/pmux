@@ -1,0 +1,33 @@
+{
+  "session": "myproject",
+  "model": "claude-sonnet-4",
+  "layout": "tiled",
+
+  "roles": {
+    "frontend": {
+      "instructions": "You are a React frontend developer.\nFocus on UI components, pages, styling, and client-side logic.\nUse TypeScript and follow the project's component patterns.\nCoordinate with the backend agent for API integration."
+    },
+    "backend": {
+      "instructions": "You are a Node.js API developer.\nBuild REST endpoints, middleware, business logic, and database queries.\nUse TypeScript and Express/Fastify conventions.\nCoordinate with the frontend agent on API contracts."
+    },
+    "devops": {
+      "instructions": "You are a DevOps engineer.\nManage Docker configurations, CI/CD pipelines, deployment scripts,\nand infrastructure as code. Monitor for security and performance issues."
+    }
+  },
+
+  "agents": {
+    "frontend": {
+      "dir": "./frontend",
+      "role": "frontend"
+    },
+    "backend": {
+      "dir": "./backend",
+      "role": "backend"
+    },
+    "devops": {
+      "dir": "./infra",
+      "role": "devops",
+      "model": "claude-opus-4"
+    }
+  }
+}
