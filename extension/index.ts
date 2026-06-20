@@ -1523,13 +1523,26 @@ export default function (pi: ExtensionAPI) {
         .map((d) => d.name);
     } catch {}
 
-    if (projects.length === 0) {
-      ctx.ui.notify("No projects found.", "info");
+    const ADD_PROJECT = "+ Add new project";
+    const options = [...projects, ADD_PROJECT];
+
+    const choice = await ctx.ui.select("Projects:", options);
+    if (!choice) return;
+
+    if (choice === ADD_PROJECT) {
+      const name = await ctx.ui.input("Project name:");
+      if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+      const { mkdirSync: mkDir } = await import("node:fs");
+      const projectDir = join(sessionsDir, name);
+      mkDir(projectDir, { recursive: true });
+      await writeSessionConfig(name, { createdAt: new Date().toISOString() });
+
+      ctx.ui.notify(`Project "${name}" created.`, "info");
       return;
     }
 
-    const project = await ctx.ui.select("Select project:", projects);
-    if (!project) return;
+    const project = choice;
 
     const action = await ctx.ui.select(`Project "${project}":`, ["Rename", "Delete"]);
     if (!action) return;
@@ -1584,17 +1597,62 @@ export default function (pi: ExtensionAPI) {
     const allAgents = Object.values(registry);
     const offlineAgents = allAgents.filter((a) => a.status === "offline");
 
-    if (offlineAgents.length === 0) {
-      ctx.ui.notify("No offline agents to manage. Online agents must /pmux leave first.", "info");
+    const ADD_AGENT = "+ Add new agent";
+    const options = [
+      ...offlineAgents.map((a) => {
+        const roleLabel = a.roleName ? ` (${a.roleName})` : "";
+        return `${a.name}${roleLabel}`;
+      }),
+      ADD_AGENT,
+    ];
+    const selected = await ctx.ui.select("Agents:", options);
+    if (!selected) return;
+
+    if (selected === ADD_AGENT) {
+      const name = await ctx.ui.input("Agent name:");
+      if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+      // Role selection (built-in + project)
+      const projectRoles = await readRoles(mySession);
+      const allRoles: RoleDefinition[] = [
+        ...Object.values(projectRoles),
+        ...BUILTIN_ROLES.filter((r) => !projectRoles[r.name]),
+      ];
+
+      let roleName: string | undefined;
+      if (allRoles.length > 0) {
+        const roleOptions = allRoles.map((r) => {
+          const desc = r.description || r.instructions.slice(0, 60);
+          return `${r.name} -- ${desc}`;
+        });
+        const roleChoice = await ctx.ui.select("Role:", roleOptions);
+        if (roleChoice) {
+          roleName = roleChoice.split(" -- ")[0]!;
+          // Copy built-in to project if needed
+          if (!projectRoles[roleName]) {
+            const role = allRoles.find((r) => r.name === roleName);
+            if (role) await addRole(mySession, role);
+          }
+        }
+      }
+
+      const agent: AgentInfo = {
+        id: newAgentId(),
+        name,
+        session: mySession,
+        role: roleName ?? `Agent ${name}`,
+        roleName,
+        cwd: ctx.cwd,
+        pid: 0,
+        status: "offline",
+        registeredAt: new Date().toISOString(),
+        lastHeartbeat: new Date().toISOString(),
+      };
+      await registerAgent(mySession, agent);
+
+      ctx.ui.notify(`Agent "${name}" created (offline). They can /pmux join to connect.`, "info");
       return;
     }
-
-    const options = offlineAgents.map((a) => {
-      const roleLabel = a.roleName ? ` (${a.roleName})` : "";
-      return `${a.name}${roleLabel}`;
-    });
-    const selected = await ctx.ui.select("Select agent:", options);
-    if (!selected) return;
 
     const selectedName = selected.split(" (")[0]!;
     const agent = offlineAgents.find((a) => a.name === selectedName);
