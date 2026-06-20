@@ -227,7 +227,7 @@ pi starts
   └─► session_start
         ├─► Reload recovery: check pi session entries for stored UUID
         ├─► Auto-register from PMUX_AGENT env, or recover from pi session entries
-        │   (or wait for /pmux_join)
+        │   (or wait for /pmux join)
         ├─► Go online, start heartbeat (30s interval)
         ├─► Ensure inbox directory, artifact directories
         ├─► Start inbox FSWatcher — deliver messages via pi.sendUserMessage

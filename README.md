@@ -47,6 +47,21 @@ All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages 
 | `/pmux leave` | Leave project, return to solo Pi |
 | `/pmux manage` | Manage projects and agents (rename, delete) |
 
+## Built-in Roles
+
+pmux ships with 5 role templates, ready to use during `/pmux join`:
+
+| Role | Description |
+|------|-------------|
+| `developer` | Write clean, well-structured code |
+| `architect` | System design, trade-offs, technical decisions |
+| `reviewer` | Code review, quality, constructive feedback |
+| `devops` | Infrastructure, CI/CD, deployment |
+| `planner` | Task breakdown, requirements, coordination |
+
+Built-in roles are copied to the project on first use and can be customized.
+You can also create custom roles during agent creation or with `pmux_role`.
+
 ## Tools (8)
 
 | Tool | Actions | Purpose |
@@ -103,7 +118,7 @@ All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages 
 
 ```
 extension/
-├── index.ts             # Lifecycle, 8 tools, 3 commands
+├── index.ts             # Lifecycle, 8 tools, /pmux command with subcommands
 ├── registry.ts          # Agent identity (UUID-keyed, online/offline)
 ├── messaging.ts         # Crash-safe file-based inboxes
 ├── reservations.ts      # Path-prefix file reservations
@@ -116,6 +131,12 @@ extension/
 
 - **Pi** (coding agent)
 - **Node.js 22+**
+
+## Development
+
+```bash
+npm test        # Verify extension files parse correctly (uses Pi's jiti parser)
+```
 
 ## License
 

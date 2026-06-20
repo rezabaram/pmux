@@ -36,13 +36,21 @@ extension/
 └── package.json
 ```
 
-## Commands (3)
+## Commands
+
+Single `/pmux` command with subcommands:
 
 | Command | Purpose |
 |---------|---------|
-| `/pmux` | Show agent status |
-| `/pmux_join [project]` | Join or create a project (select/create agent) |
-| `/pmux_leave` | Leave project, return to solo Pi |
+| `/pmux` | Status + available commands |
+| `/pmux join` | Join or create a project (select/create agent) |
+| `/pmux leave` | Leave project, return to solo Pi |
+| `/pmux manage` | Manage projects and agents (rename, delete) |
+
+## Built-in Roles
+
+5 role templates ship with pmux: developer, architect, reviewer, devops, planner.
+Shown during agent creation, copied to project on first use for customization.
 
 ## Tools (8)
 
@@ -79,7 +87,7 @@ pi starts
   └─► session_start (silent — no notifications, no auto-registration)
         └─► Reload recovery only: check pi session entries for stored UUID
 
-/pmux_join
+/pmux join
   ├─► Select or create project
   ├─► Select existing agent or create new (name, role)
   ├─► Go online, start heartbeat (30s)
@@ -92,7 +100,7 @@ pi running
   ├─► agent_end → heartbeat, confirm messages, clean stale reservations
   └─► tools available: 8 tools for coordination
 
-/pmux_leave
+/pmux leave
   ├─► Go offline in registry
   ├─► Stop heartbeat, close inbox watcher
   ├─► Clear all state
