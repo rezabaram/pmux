@@ -1502,13 +1502,15 @@ export default function (pi: ExtensionAPI) {
   // -- manage handler --
 
   async function handleManage(ctx: ExtensionContext): Promise<void> {
-    const what = await ctx.ui.select("Manage:", ["Projects", "Agents"]);
+    const what = await ctx.ui.select("Manage:", ["Projects", "Agents", "Roles"]);
     if (!what) return;
 
     if (what === "Projects") {
       await manageProjects(ctx);
-    } else {
+    } else if (what === "Agents") {
       await manageAgents(ctx);
+    } else {
+      await manageRoles(ctx);
     }
   }
 
@@ -1614,6 +1616,56 @@ export default function (pi: ExtensionAPI) {
 
       await updateAgent(mySession, agent.id, { name: newName });
       ctx.ui.notify(`Renamed "${agent.name}" to "${newName}".`, "info");
+    }
+  }
+
+
+
+  async function manageRoles(ctx: ExtensionContext): Promise<void> {
+    if (!mySession) {
+      ctx.ui.notify("Join a project first with /pmux join.", "info");
+      return;
+    }
+
+    const roles = await readRoles(mySession);
+    const roleNames = Object.keys(roles);
+
+    const ADD_NEW = "+ Add new role";
+    const options = [
+      ...roleNames.map((name) => {
+        const desc = roles[name]!.description || roles[name]!.instructions.slice(0, 60);
+        return `${name} -- ${desc}`;
+      }),
+      ADD_NEW,
+    ];
+
+    const choice = await ctx.ui.select("Roles:", options);
+    if (!choice) return;
+
+    if (choice === ADD_NEW) {
+      const name = await ctx.ui.input("Role name:");
+      if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
+      const desc = await ctx.ui.input("Short description:");
+      if (!desc) { ctx.ui.notify("Cancelled.", "info"); return; }
+      const instructions = await ctx.ui.input("Full instructions:");
+      if (!instructions) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+      await addRole(mySession, { name, description: desc, instructions });
+      ctx.ui.notify(`Role "${name}" added.`, "info");
+
+    } else {
+      // Selected an existing role
+      const selectedName = choice.split(" -- ")[0]!;
+      const action = await ctx.ui.select(`Role "${selectedName}":`, ["Delete"]);
+      if (!action) return;
+
+      if (action === "Delete") {
+        const confirm = await ctx.ui.confirm("Delete role?", `Permanently delete role "${selectedName}"?`);
+        if (!confirm) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+        await removeRole(mySession, selectedName);
+        ctx.ui.notify(`Role "${selectedName}" deleted.`, "info");
+      }
     }
   }
 
