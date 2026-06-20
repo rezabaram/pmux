@@ -17,24 +17,24 @@ That's it. Start Pi in any terminal and you're ready.
 ```bash
 # Terminal 1
 pi
-/pmux_join              # → select/create project → select/create agent (name, role)
+/pmux join              # → select/create project → select/create agent (name, role)
 
 # Terminal 2
 pi
-/pmux_join              # → join same project → another agent joins
+/pmux join              # → join same project → another agent joins
 
 # They discover each other and can communicate
 # When done:
-/pmux_leave             # → back to solo Pi
+/pmux leave             # → back to solo Pi
 ```
 
 ## How It Works
 
-1. **Join** — `/pmux_join` selects or creates a project, then picks or creates an agent
+1. **Join** — `/pmux join` selects or creates a project, then picks or creates an agent
 2. **Communicate** — `pmux_send` delivers messages to other agents' inboxes via `fs.watch`
 3. **Coordinate** — `pmux_task` manages a shared backlog with auto file reservations
 4. **Learn** — `pmux_journal` captures decisions and learnings, injected into every agent's prompt
-5. **Leave** — `/pmux_leave` exits the project, returns to normal solo Pi
+5. **Leave** — `/pmux leave` exits the project, returns to normal solo Pi
 
 All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages are delivered instantly via filesystem notifications — no polling, no servers.
 
@@ -42,9 +42,10 @@ All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages 
 
 | Command | Purpose |
 |---------|---------|
-| `/pmux` | Show agent status |
-| `/pmux_join [project]` | Join or create a project (interactive wizard) |
-| `/pmux_leave` | Leave project, return to solo Pi |
+| `/pmux` | Status + available commands |
+| `/pmux join` | Join or create a project |
+| `/pmux leave` | Leave project, return to solo Pi |
+| `/pmux manage` | Manage projects and agents (rename, delete) |
 
 ## Tools (8)
 
@@ -87,7 +88,7 @@ All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages 
 
 ## Key Features
 
-- **Zero overhead** — Pi starts normally, pmux is invisible until `/pmux_join`
+- **Zero overhead** — Pi starts normally, pmux is invisible until `/pmux join`
 - **Terminal agnostic** — works in any terminal, any environment
 - **UUID identity** — agents persist across restarts
 - **Crash-safe messaging** — messages survive crashes, delivered on reconnect
