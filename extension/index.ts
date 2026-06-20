@@ -78,6 +78,35 @@ import {
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
+const BUILTIN_ROLES: RoleDefinition[] = [
+  {
+    name: "developer",
+    description: "Write clean, well-structured code",
+    instructions: "You are a software developer. Focus on writing clean, well-structured code. Follow best practices for the project's language and framework. Write tests when appropriate. Read existing code before making changes to understand patterns and conventions. Coordinate with other agents when your changes affect shared interfaces.",
+  },
+  {
+    name: "architect",
+    description: "System design, trade-offs, technical decisions",
+    instructions: "You are a software architect. Focus on system design, high-level structure, and technical decision-making. Evaluate trade-offs between approaches. Define interfaces, data models, and component boundaries. Review code for architectural consistency. Guide other agents on design patterns, project organization, and scalability concerns. Think about maintainability, extensibility, and separation of concerns.",
+  },
+  {
+    name: "reviewer",
+    description: "Code review, quality, constructive feedback",
+    instructions: "You are a code reviewer. Review code for correctness, clarity, performance, and adherence to project conventions. Provide constructive, specific feedback. Identify potential bugs, security issues, and edge cases. Suggest improvements without being prescriptive. Approve when quality standards are met.",
+  },
+  {
+    name: "devops",
+    description: "Infrastructure, CI/CD, deployment",
+    instructions: "You are a DevOps engineer. Manage infrastructure, CI/CD pipelines, deployment scripts, and configuration. Focus on reliability, security, and automation. Monitor for performance issues. Write infrastructure as code. Ensure environments are reproducible and deployments are safe.",
+  },
+  {
+    name: "planner",
+    description: "Task breakdown, requirements, coordination",
+    instructions: "You are a project planner. Break down features into actionable tasks with clear descriptions. Define requirements and acceptance criteria in task descriptions. Coordinate work across agents. Track progress and identify blockers. Keep the backlog organized and prioritized.",
+  },
+];
+
+
 export default function (pi: ExtensionAPI) {
   // -- State ----------------------------------------------------
   let myId: string | undefined; // UUID  -- stable across restarts
@@ -1344,16 +1373,51 @@ export default function (pi: ExtensionAPI) {
       const name = await ctx.ui.input("Agent name:");
       if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-      const roles = await readRoles(mySession);
-      const roleNames = Object.keys(roles);
+      // Role selection: project roles + built-in templates + create new
+      const projectRoles = await readRoles(mySession);
+      const CREATE_ROLE = "+ Create new role";
+
+      // Merge: project roles first, then built-ins (skip duplicates)
+      const allRoles: RoleDefinition[] = [
+        ...Object.values(projectRoles),
+        ...BUILTIN_ROLES.filter((r) => !projectRoles[r.name]),
+      ];
+
+      const roleOptions = [
+        ...allRoles.map((r) => {
+          const desc = r.description || r.instructions.slice(0, 60);
+          return `${r.name} -- ${desc}`;
+        }),
+        CREATE_ROLE,
+      ];
+
       let roleName: string | undefined;
       let roleInstructions: string | undefined;
 
-      if (roleNames.length > 0) {
-        roleName = (await ctx.ui.select("Role:", roleNames)) ?? undefined;
-        if (roleName) {
-          roleInstructions = roles[roleName]!.instructions;
+      const roleChoice = await ctx.ui.select("Role:", roleOptions);
+      if (roleChoice && roleChoice !== CREATE_ROLE) {
+        const selectedRoleName = roleChoice.split(" -- ")[0]!;
+        const role = allRoles.find((r) => r.name === selectedRoleName);
+        if (role) {
+          roleName = role.name;
+          roleInstructions = role.instructions;
+          // If built-in, copy to project roles for customization
+          if (!projectRoles[role.name]) {
+            await addRole(mySession, role);
+          }
         }
+      } else if (roleChoice === CREATE_ROLE) {
+        const newName = await ctx.ui.input("Role name:");
+        if (!newName) { ctx.ui.notify("Cancelled.", "info"); return; }
+        const newDesc = await ctx.ui.input("Short description:");
+        if (!newDesc) { ctx.ui.notify("Cancelled.", "info"); return; }
+        const newInstr = await ctx.ui.input("Full instructions:");
+        if (!newInstr) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+        const newRole: RoleDefinition = { name: newName, description: newDesc, instructions: newInstr };
+        await addRole(mySession, newRole);
+        roleName = newName;
+        roleInstructions = newInstr;
       }
 
       myId = newAgentId();
