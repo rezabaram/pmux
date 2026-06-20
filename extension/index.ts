@@ -1296,31 +1296,48 @@ export default function (pi: ExtensionAPI) {
         await writeSessionConfig(mySession, config);
       }
 
-      // 2. Select existing agent or create new
+      // 2. Agent selection
       const registry = await readRegistry(mySession);
       const allAgents = Object.values(registry);
+      const onlineAgents = allAgents.filter((a) => a.status === "online");
       const offlineAgents = allAgents.filter((a) => a.status === "offline" && a.id !== previousAgentId);
 
       const CREATE_AGENT = "+ Create new agent";
-      let agentChoice = CREATE_AGENT;
+      let agentChoice: string | undefined;
 
       if (offlineAgents.length > 0) {
+        // Available agents to resume + create option
         const options = offlineAgents.map((a) => {
-          const parts = [a.roleName, a.name].filter(Boolean).join(":");
-          return `${a.name}  -- ${parts}`;
+          const roleLabel = a.roleName ? ` (${a.roleName})` : "";
+          return `${a.name}${roleLabel}`;
         });
-        const choice = await ctx.ui.select("Join as:", [...options, CREATE_AGENT]);
-        if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
-        agentChoice = choice;
+        agentChoice = await ctx.ui.select("Join as:", [...options, CREATE_AGENT]);
+        if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+      } else if (onlineAgents.length > 0) {
+        // Agents exist but all are in use
+        const names = onlineAgents.map((a) => a.name).join(", ");
+        agentChoice = await ctx.ui.select(
+          `${onlineAgents.length} agent(s) online (${names}), none available:`,
+          [CREATE_AGENT]
+        );
+        if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+      } else {
+        // Fresh project, no agents
+        agentChoice = await ctx.ui.select(
+          `No agents in "${project}" yet:`,
+          [CREATE_AGENT]
+        );
+        if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
       }
 
       if (agentChoice === CREATE_AGENT) {
-        // - Create new agent ---------------------------------
+        // -- Create new agent --
         const name = await ctx.ui.input("Agent name:");
         if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-
-        // Role (optional  -- may not have roles defined yet)
+        // Role (if roles exist)
         const roles = await readRoles(mySession);
         const roleNames = Object.keys(roles);
         let roleName: string | undefined;
@@ -1333,7 +1350,6 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        // Create agent
         myId = newAgentId();
         myName = name;
         myRoleName = roleName;
@@ -1356,14 +1372,11 @@ export default function (pi: ExtensionAPI) {
         await startAgent(ctx);
 
         const roleNote = roleName ? ` with role "${roleName}"` : "";
-        ctx.ui.notify(
-          `Joined project "${project}" as "${name}"${roleNote}.`,
-          "info"
-        );
+        ctx.ui.notify(`Joined "${project}" as "${name}"${roleNote}.`, "info");
 
       } else {
-        // - Resume existing agent -----------------------------
-        const selectedName = agentChoice.split("  -- ")[0]!;
+        // -- Resume existing agent --
+        const selectedName = agentChoice.split(" (")[0]!;
         const agent = offlineAgents.find((a) => a.name === selectedName);
         if (!agent) { ctx.ui.notify("Agent not found.", "error"); return; }
 
@@ -1381,10 +1394,12 @@ export default function (pi: ExtensionAPI) {
         const pending = getRecoverableMessages(mySession, myId);
         const pendingNote = pending.length > 0 ? ` ${pending.length} message(s) waiting.` : "";
         ctx.ui.notify(
-          `Joined project "${project}" as "${myName}" (${myRoleName || "no role"}).${pendingNote}`,
+          `Joined "${project}" as "${myName}" (${myRoleName || "no role"}).${pendingNote}`,
           "info"
         );
       }
+    },
+  });
     },
   });
 
