@@ -1523,7 +1523,7 @@ export default function (pi: ExtensionAPI) {
         .map((d) => d.name);
     } catch {}
 
-    const ADD_PROJECT = "+ Add new project";
+    const ADD_PROJECT = "+ New project";
     const options = [...projects, ADD_PROJECT];
 
     const choice = await ctx.ui.select("Projects:", options);
@@ -1597,7 +1597,7 @@ export default function (pi: ExtensionAPI) {
     const allAgents = Object.values(registry);
     const offlineAgents = allAgents.filter((a) => a.status === "offline");
 
-    const ADD_AGENT = "+ Add new agent";
+    const ADD_AGENT = "+ New agent";
     const options = [
       ...offlineAgents.map((a) => {
         const roleLabel = a.roleName ? ` (${a.roleName})` : "";
@@ -1688,7 +1688,7 @@ export default function (pi: ExtensionAPI) {
     const roles = await readRoles(mySession);
     const roleNames = Object.keys(roles);
 
-    const ADD_NEW = "+ Add new role";
+    const ADD_NEW = "+ New role";
     const options = [
       ...roleNames.map((name) => {
         const desc = roles[name]!.description || roles[name]!.instructions.slice(0, 60);
