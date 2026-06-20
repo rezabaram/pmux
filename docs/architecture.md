@@ -10,7 +10,6 @@
 │  │  ┌──── pi agent ─────────┐     ┌──── pi agent ─────────┐            │   │
 │  │  │  name: frontend        │     │  name: backend         │            │   │
 │  │  │  role: developer       │────▶│  role: developer        │            │   │
-│  │  │  team: Home            │◀────│  team: Home             │            │   │
 │  │  └────────────────────────┘     └────────────────────────┘            │   │
 │  │           │ file-based inbox            │                              │   │
 │  └───────────┼─────────────────────────────┼─────────────────────────────┘   │
@@ -71,7 +70,6 @@ extension/
 | `messages.log` | JSONL | Message history (append-only) |
 | `inbox/<uuid>/` | `.json` / `.delivered` | Per-agent message inbox |
 | `artifacts/project/` | user files | Project-wide shared docs |
-| `artifacts/teams/<team>/` | user files | Team shared docs |
 | `artifacts/agents/<uuid>/` | user files | Private agent docs |
 
 ## Agent Lifecycle
@@ -83,7 +81,7 @@ pi starts
 
 /pmux_join
   ├─► Select or create project
-  ├─► Select existing agent or create new (name, team, role)
+  ├─► Select existing agent or create new (name, role)
   ├─► Go online, start heartbeat (30s)
   ├─► Watch inbox for messages (fs.watch)
   ├─► Deliver pending + crash-recovery messages
@@ -159,7 +157,6 @@ pmux_journal({ action: "add", type: "decision", content: "..." })
 On each turn (`before_agent_start`), the extension injects:
 1. Role instructions (from `roles.json`)
 2. Project context (from `artifacts/project/CONTEXT.md`)
-3. Team context (from `artifacts/teams/<team>/CONTEXT.md`)
 4. Recent journal entries (last 10, sliding window)
 5. Available roles summary
 6. Online agent roster
@@ -175,7 +172,6 @@ On each turn (`before_agent_start`), the extension injects:
     "id": "e02622ce",
     "name": "frontend",
     "session": "myproject",
-    "team": "Home",
     "role": "developer",
     "roleName": "developer",
     "cwd": "/home/user/project",

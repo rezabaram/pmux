@@ -17,7 +17,7 @@ That's it. Start Pi in any terminal and you're ready.
 ```bash
 # Terminal 1
 pi
-/pmux_join              # → select/create project → select/create agent (name, team, role)
+/pmux_join              # → select/create project → select/create agent (name, role)
 
 # Terminal 2
 pi
@@ -82,8 +82,6 @@ All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages 
 └── artifacts/
     ├── project/           # Shared across all agents
     │   └── CONTEXT.md     # Auto-injected into prompts
-    ├── teams/<team>/      # Shared within team
-    │   └── CONTEXT.md     # Auto-injected for team members
     └── agents/<uuid>/     # Private per-agent space
 ```
 
@@ -96,8 +94,8 @@ All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages 
 - **File reservations** — claim files before editing, prevent conflicts
 - **Task backlog** — assign, pick, done with auto file reservation
 - **Shared journal** — decisions and learnings in every agent's prompt
-- **Three-tier artifacts** — project, team, and private document sharing
-- **CONTEXT.md injection** — project and team context auto-loaded into prompts
+- **Two-tier artifacts — project and private document sharing
+- **CONTEXT.md injection** — project context auto-loaded into prompts
 - **Zero dependencies** — just Node.js and Pi
 
 ## Extension Structure

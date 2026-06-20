@@ -85,7 +85,6 @@ export default function (pi: ExtensionAPI) {
   let myRole: string | undefined;
   let myRoleName: string | undefined;
   let myRoleInstructions: string | undefined;
-  let myTeam: string | undefined;
   let mySession: string | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let inboxWatcher: FSWatcher | undefined;
@@ -212,7 +211,6 @@ export default function (pi: ExtensionAPI) {
         myId = agent.id;
         myName = agent.name;
         myRole = agent.role;
-        myTeam = agent.team;
         if (agent.roleName) {
           await loadRoleInstructions(mySession, agent.roleName);
         }
@@ -308,13 +306,6 @@ export default function (pi: ExtensionAPI) {
       extra += `\n\n## Project Context\n${projectCtx}`;
     }
 
-    // Inject team context (CONTEXT.md)
-    if (myTeam) {
-      const teamCtx = readContextFile(teamArtifactsDir(myTeam));
-      if (teamCtx) {
-        extra += `\n\n## Team "${myTeam}" Context\n${teamCtx}`;
-      }
-    }
 
     // Inject recent journal entries (sliding window)
     const recentJournal = getRecentEntries(mySession);
@@ -351,12 +342,11 @@ export default function (pi: ExtensionAPI) {
       extra += `\n\n## Multi-Agent Environment (pmux)`;
       extra += `\nYou are agent "${myName}" in session "${mySession}" (full address: ${myAddress()}).`;
       if (myRoleName) extra += `\nRole: ${myRoleName}.`;
-      if (myTeam) extra += `\nTeam: ${myTeam}.`;
 
       if (sameSessionOthers.length > 0) {
         const list = sameSessionOthers
           .map((a) => {
-            const parts = [a.team, a.roleName || a.role, a.name].filter(Boolean);
+            const parts = [a.roleName || a.role, a.name].filter(Boolean);
             return `  - ${a.name} (${formatAddress(a.session, a.name)}): ${parts.join(":")} [${a.status}]`;
           })
           .join("\n");
@@ -366,7 +356,7 @@ export default function (pi: ExtensionAPI) {
       if (crossSessionAgents.length > 0) {
         const list = crossSessionAgents
           .map((a) => {
-            const parts = [a.team, a.roleName || a.role, a.name].filter(Boolean);
+            const parts = [a.roleName || a.role, a.name].filter(Boolean);
             return `  - ${formatAddress(a.session, a.name)}: ${parts.join(":")} [${a.status}]`;
           })
           .join("\n");
@@ -390,7 +380,6 @@ export default function (pi: ExtensionAPI) {
     if (myId) {
       extra += `\n\n### Shared Artifacts\nRead and write shared documents using the standard read/write/edit tools.`;
       extra += `\n- Project (all agents): ${projectArtifactsDir()}`;
-      if (myTeam) extra += `\n- Team "${myTeam}" (team members): ${teamArtifactsDir(myTeam)}`;
       extra += `\n- Private (you only): ${agentArtifactsDir(myId)}`;
     }
 
@@ -471,7 +460,7 @@ export default function (pi: ExtensionAPI) {
     name: "pmux_list",
     label: "List Agents",
     description:
-      "List online pmux agents with their session, name, role, team, and status. " +
+      "List online pmux agents with their session, name, role, and status. " +
       "Set allSessions=true to include agents from other sessions.",
     promptSnippet: "List online pmux agents and their roles/status (supports cross-session discovery)",
     parameters: Type.Object({
@@ -510,7 +499,7 @@ export default function (pi: ExtensionAPI) {
           const isMe = a.id === myId;
           const marker = isMe ? " (you)" : "";
           const addr = formatAddress(session, a.name);
-          const label = [a.team, a.roleName, a.name].filter(Boolean).join(":");
+          const label = [a.roleName, a.name].filter(Boolean).join(":");
           return `  - ${addr}${marker} [${a.status}]: ${label} (cwd: ${a.cwd})`;
         });
         sections.push(`${header}\n${lines.join("\n")}`);
@@ -638,9 +627,9 @@ export default function (pi: ExtensionAPI) {
     name: "pmux_artifacts",
     label: "List Artifacts",
     description:
-      "List shared documents at project, team, and agent levels. " +
+      "List shared documents at project and agent levels. " +
       "Use read/write/edit tools to work with the files directly.",
-    promptSnippet: "List shared artifacts at project, team, or agent level",
+    promptSnippet: "List shared artifacts at project or agent level",
     parameters: Type.Object({}),
 
     async execute() {
@@ -656,13 +645,6 @@ export default function (pi: ExtensionAPI) {
       sections.push(`Project (${projDir}):\n` +
         (projFiles.length > 0 ? projFiles.map((f) => `  - ${f}`).join("\n") : "  (empty)"));
 
-      // Team level
-      if (myTeam) {
-        const tDir = teamArtifactsDir(myTeam);
-        const tFiles = listFiles(tDir);
-        sections.push(`Team \"${myTeam}\" (${tDir}):\n` +
-          (tFiles.length > 0 ? tFiles.map((f) => `  - ${f}`).join("\n") : "  (empty)"));
-      }
 
       // Agent level
       const aDir = agentArtifactsDir(myId);
@@ -672,7 +654,6 @@ export default function (pi: ExtensionAPI) {
 
       return {
         content: [{ type: "text", text: sections.join("\n\n") }],
-        details: { project: projFiles, team: myTeam ? listFiles(teamArtifactsDir(myTeam)) : [], agent: aFiles },
       };
     },
   });
@@ -790,11 +771,11 @@ export default function (pi: ExtensionAPI) {
     name: "pmux_task",
     label: "Task Backlog",
     description:
-      "Manage the team task backlog. Actions: add (create task), list (show tasks), " +
+      "Manage the task backlog. Actions: add (create task), list (show tasks), " +
       "assign (delegate to agent), pick (claim/accept task), done (complete), " +
       "drop (release back to queue), block (mark blocked). " +
       "Picking a task auto-reserves its files. Done/drop auto-releases them.",
-    promptSnippet: "Manage team task backlog — add, list, assign, pick, done, drop, block",
+    promptSnippet: "Manage task backlog — add, list, assign, pick, done, drop, block",
     promptGuidelines: [
       "Use action 'pick' to claim the next available task or accept an assigned task.",
       "Picking a task auto-reserves its files. Done/drop auto-releases them.",
@@ -807,7 +788,6 @@ export default function (pi: ExtensionAPI) {
       title: Type.Optional(Type.String({ description: "Task title (required for add)" })),
       description: Type.Optional(Type.String({ description: "Task description or acceptance criteria" })),
       files: Type.Optional(Type.Array(Type.String({ description: "Related file paths (auto-reserved on pick)" }))),
-      team: Type.Optional(Type.String({ description: "Team name for the task" })),
       urgent: Type.Optional(Type.Boolean({ description: "If true, prepend to backlog instead of append" })),
       // assign, pick, done, drop, block
       id: Type.Optional(Type.String({ description: "Task ID (e.g. TASK-01)" })),
@@ -834,7 +814,6 @@ export default function (pi: ExtensionAPI) {
               title: params.title,
               description: params.description,
               status: "todo",
-              team: params.team || myTeam,
               files: params.files,
               createdBy: myName,
               createdAt: now,
@@ -862,8 +841,6 @@ export default function (pi: ExtensionAPI) {
           if (params.status) {
             filtered = filtered.filter((t) => t.status === params.status);
           }
-          if (params.team) {
-            filtered = filtered.filter((t) => t.team === params.team);
           }
 
           if (filtered.length === 0) {
@@ -1261,7 +1238,7 @@ export default function (pi: ExtensionAPI) {
         const isMe = a.id === myId;
         const marker = isMe ? " ◆" : "";
         const addr = formatAddress(a.session, a.name);
-        const label = [a.team, a.roleName].filter(Boolean).join(":");
+        const label = [a.roleName].filter(Boolean).join(":");
         return `${addr}${marker} [${a.status}] ${label || a.role}`;
       });
 
@@ -1334,7 +1311,7 @@ export default function (pi: ExtensionAPI) {
 
       if (offlineAgents.length > 0) {
         const options = offlineAgents.map((a) => {
-          const parts = [a.team, a.roleName, a.name].filter(Boolean).join(":");
+          const parts = [a.roleName, a.name].filter(Boolean).join(":");
           return `${a.name} — ${parts}`;
         });
         const choice = await ctx.ui.select("Join as:", [...options, CREATE_AGENT]);
@@ -1347,24 +1324,6 @@ export default function (pi: ExtensionAPI) {
         const name = await ctx.ui.input("Agent name:");
         if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-        // Team
-        let team: string | undefined;
-        const existingTeams = [...new Set(
-          allAgents.map((a) => a.team).filter((t): t is string => !!t)
-        )];
-
-        if (existingTeams.length > 0) {
-          const CREATE_TEAM = "+ Create new team";
-          const teamChoice = await ctx.ui.select("Team:", [...existingTeams, CREATE_TEAM]);
-          if (!teamChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
-          team = teamChoice === CREATE_TEAM
-            ? (await ctx.ui.input("New team name:")) ?? undefined
-            : teamChoice;
-          if (!team) { ctx.ui.notify("Cancelled.", "info"); return; }
-        } else {
-          team = (await ctx.ui.input("Team name:")) ?? undefined;
-          if (!team) { ctx.ui.notify("Cancelled.", "info"); return; }
-        }
 
         // Role (optional — may not have roles defined yet)
         const roles = await readRoles(mySession);
@@ -1382,7 +1341,6 @@ export default function (pi: ExtensionAPI) {
         // Create agent
         myId = newAgentId();
         myName = name;
-        myTeam = team;
         myRoleName = roleName;
         myRole = roleName ?? `Agent ${name}`;
         myRoleInstructions = roleInstructions;
@@ -1391,7 +1349,6 @@ export default function (pi: ExtensionAPI) {
           id: myId,
           name: myName,
           session: mySession,
-          team: myTeam,
           role: myRole,
           roleName: myRoleName,
           cwd: ctx.cwd,
@@ -1405,7 +1362,7 @@ export default function (pi: ExtensionAPI) {
 
         const roleNote = roleName ? ` with role "${roleName}"` : "";
         ctx.ui.notify(
-          `Joined project "${project}" as "${name}" (team: ${team})${roleNote}.`,
+          `Joined project "${project}" as "${name}"${roleNote}.`,
           "info"
         );
 
@@ -1418,7 +1375,6 @@ export default function (pi: ExtensionAPI) {
         myId = agent.id;
         myName = agent.name;
         myRole = agent.role;
-        myTeam = agent.team;
         myRoleName = agent.roleName;
         if (agent.roleName) {
           await loadRoleInstructions(mySession, agent.roleName);
@@ -1465,7 +1421,6 @@ export default function (pi: ExtensionAPI) {
       myRole = undefined;
       myRoleName = undefined;
       myRoleInstructions = undefined;
-      myTeam = undefined;
       mySession = undefined;
 
       // Clear status widget and title
@@ -1500,9 +1455,6 @@ export default function (pi: ExtensionAPI) {
     return join(PMUX_BASE, mySession!, "artifacts", "project");
   }
 
-  function teamArtifactsDir(team: string): string {
-    return join(PMUX_BASE, mySession!, "artifacts", "teams", team);
-  }
 
   function agentArtifactsDir(agentId: string): string {
     return join(PMUX_BASE, mySession!, "artifacts", "agents", agentId);
@@ -1511,7 +1463,6 @@ export default function (pi: ExtensionAPI) {
   function ensureArtifactDirs(): void {
     if (!mySession || !myId) return;
     mkdirSync(projectArtifactsDir(), { recursive: true });
-    if (myTeam) mkdirSync(teamArtifactsDir(myTeam), { recursive: true });
     mkdirSync(agentArtifactsDir(myId), { recursive: true });
   }
 
@@ -1592,7 +1543,7 @@ export default function (pi: ExtensionAPI) {
       const parts = agents.map((a) => {
         const icon = a.id === myId ? "◆" : "○";
         const color: "accent" | "success" = a.id === myId ? "accent" : "success";
-        const label = [a.team, a.roleName, a.name].filter(Boolean).join(":");
+        const label = [a.roleName, a.name].filter(Boolean).join(":");
         return theme.fg(color, `${icon} ${label}`);
       });
 

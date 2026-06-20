@@ -21,7 +21,6 @@ export interface AgentInfo {
   id: string; // UUID — primary key, stable across restarts
   name: string; // human-friendly display name
   session: string; // pmux session name
-  team?: string; // team name (= tmux window name, if using tmux)
   role: string; // human-readable role description
   roleName?: string; // references a RoleDefinition name
   cwd: string;

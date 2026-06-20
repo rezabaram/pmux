@@ -58,7 +58,6 @@ Agents are identified by UUID (stable across restarts). Names are for human-frie
     "id": "e02622ce",
     "name": "frontend",
     "session": "myproject",
-    "team": "Home",
     "role": "developer",
     "roleName": "developer",
     "cwd": "/home/user/project/frontend",
@@ -122,7 +121,6 @@ Ordered work queue with integrated file reservations.
     "title": "Add auth middleware",
     "description": "Implement JWT validation...",
     "status": "in-progress",
-    "team": "Home",
     "assignee": "frontend",
     "assigneeId": "e02622ce",
     "files": ["src/auth/middleware.ts", "src/auth/types.ts"],
@@ -158,7 +156,6 @@ Blocked:       any → block → blocked → pick → in-progress
 
 Three-level document sharing:
 - **Project** (`artifacts/project/`): visible to all agents
-- **Team** (`artifacts/teams/<team>/`): visible to team members
 - **Agent** (`artifacts/agents/<agentId>/`): private to one agent
 
 Special file: `CONTEXT.md` in project/team directories is auto-injected into the system prompt.
@@ -185,7 +182,7 @@ The core extension handles:
 
 ### `pmux_list` — Agent Discovery
 
-List online agents with session, name, role, team, and status.
+List online agents with session, name, role, and status.
 Set `allSessions=true` for cross-session discovery.
 
 ### `pmux_send` — Targeted Messaging
@@ -199,7 +196,7 @@ Send to all online agents. Set `allSessions=true` for cross-session.
 
 ### `pmux_artifacts` — Shared Documents
 
-List documents at project, team, and agent levels.
+List documents at project and agent levels.
 
 ### `pmux_reserve` — File Reservations
 
@@ -213,8 +210,8 @@ List documents at project, team, and agent levels.
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
-| `add` | title, description?, files?, team?, urgent? | Create task |
-| `list` | status?, team? | Show backlog with filters |
+| `add` | title, description?, files?, urgent? | Create task |
+| `list` | status? | Show backlog with filters |
 | `assign` | id, to | Delegate to agent (sends notification) |
 | `pick` | id?, reason? | Claim/accept task (auto-reserve files) |
 | `done` | id, summary? | Complete task (auto-release files) |
@@ -308,7 +305,6 @@ pmux/                              # Project root
     │       └── <timestamp>-<id>.delivered  # Delivered, awaiting confirmation
     └── artifacts/
         ├── project/               # Shared across all agents
-        ├── teams/<team>/          # Shared within team
         └── agents/<agentId>/      # Private to agent
 ```
 
@@ -361,5 +357,4 @@ The `pick` action doubles as task acceptance for assigned tasks. This avoids sep
 2. **Cached online agent IDs**: Cache in heartbeat timer for zero-cost tool_result checks
 3. **Task dependencies**: `dependsOn` field for sequencing
 4. **Web dashboard**: HTML page showing agent status and task board
-5. **Agent groups**: Tag agents and send to groups (`@backend-team`)
 6. **Auto-restart**: Launcher restarts crashed agents

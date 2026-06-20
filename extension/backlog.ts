@@ -1,7 +1,7 @@
 /**
  * pmux — Task Backlog
  *
- * Lightweight ordered work queue for multi-agent teams.
+ * Lightweight ordered work queue for multi-agent projects.
  * Array order = priority (first item = highest priority).
  * Auto-incrementing IDs: TASK-01, TASK-02, etc.
  *
@@ -21,7 +21,6 @@ export interface Task {
   title: string;
   description?: string;
   status: "todo" | "assigned" | "in-progress" | "done" | "blocked";
-  team?: string;
   assignee?: string; // agent display name
   assigneeId?: string; // agent UUID
   files?: string[]; // related files (auto-reserve on pick)
