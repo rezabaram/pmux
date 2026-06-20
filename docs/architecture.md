@@ -43,10 +43,10 @@ Single `/pmux` command with subcommands:
 | Command | Purpose |
 |---------|---------|
 | `/pmux` | Status + available commands |
-| `/pmux join` | Join or create a project (select/create agent) |
+| `/pmux join` | Select project and agent (from existing) |
 | `/pmux leave` | Leave project, return to solo Pi |
 | `/pmux manage` | Manage projects and agents (rename, delete) |
-| `/pmux workspace` | Git worktree setup and sync |
+| `/pmux workspace` | Git workspace operations (sync, status) |
 
 ## Built-in Roles
 
@@ -90,7 +90,7 @@ pi starts
 
 /pmux join
   ├─► Select or create project
-  ├─► Select existing agent or create new (name, role)
+  ├─► Select agent (from existing)
   ├─► Go online, start heartbeat (30s)
   ├─► Watch inbox for messages (fs.watch)
   ├─► Deliver pending + crash-recovery messages
@@ -165,11 +165,11 @@ pmux_journal({ action: "add", type: "decision", content: "..." })
 ### Git Workspaces
 
 ```
-Architect:  /pmux workspace > setup     <- sets mainRepo + own workspace
-            /pmux workspace > create    <- creates worktree for an agent
+Architect:  /pmux manage > Projects > New       <- create project + set main repo
+            /pmux manage > Agents > New        <- create agent + optional worktree
 
 Agent:      cd ~/myapp-Negin && pi
-            /pmux join                  <- workspace auto-detected from agent record
+            /pmux join                         <- select project + agent
             ... work on branch agent/Negin ...
             pmux_task done TASK-03      <- signals review-ready
 

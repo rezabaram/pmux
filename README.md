@@ -17,7 +17,8 @@ That's it. Start Pi in any terminal and you're ready.
 ```bash
 # Terminal 1
 pi
-/pmux join              # → select/create project → select/create agent (name, role)
+/pmux manage            # → create project, roles, agents (first time setup)
+/pmux join              # → select project → select agent
 
 # Terminal 2
 pi
@@ -30,11 +31,12 @@ pi
 
 ## How It Works
 
-1. **Join** — `/pmux join` selects or creates a project, then picks or creates an agent
-2. **Communicate** — `pmux_send` delivers messages to other agents' inboxes via `fs.watch`
-3. **Coordinate** — `pmux_task` manages a shared backlog with auto file reservations
-4. **Learn** — `pmux_journal` captures decisions and learnings, injected into every agent's prompt
-5. **Leave** — `/pmux leave` exits the project, returns to normal solo Pi
+1. **Manage** — `/pmux manage` creates projects, agents, roles, and workspaces
+2. **Join** — `/pmux join` selects a project and agent (from what manage created)
+3. **Communicate** — `pmux_send` delivers messages to other agents' inboxes via `fs.watch`
+4. **Coordinate** — `pmux_task` manages a shared backlog with auto file reservations
+5. **Learn** — `pmux_journal` captures decisions and learnings, injected into every agent's prompt
+6. **Leave** — `/pmux leave` exits the project, returns to normal solo Pi
 
 All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages are delivered instantly via filesystem notifications — no polling, no servers.
 
@@ -43,10 +45,10 @@ All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages 
 | Command | Purpose |
 |---------|---------|
 | `/pmux` | Status + available commands |
-| `/pmux join` | Join or create a project |
+| `/pmux join` | Join a project as an agent (select from existing) |
 | `/pmux leave` | Leave project, return to solo Pi |
 | `/pmux manage` | Manage projects and agents (rename, delete) |
-| `/pmux workspace` | Git worktree setup and sync (setup, create, sync, status) |
+| `/pmux workspace` | Git workspace operations (sync, status) |
 
 ## Built-in Roles
 
@@ -68,15 +70,15 @@ You can also create custom roles during agent creation or with `pmux_role`.
 Agents can work in isolated git worktrees — each agent gets their own copy of the codebase on a separate branch.
 
 ```bash
-# Architect sets up the main repo
-/pmux workspace > setup           # registers cwd as main repo + architect's workspace
+# Architect sets up project with repo
+/pmux manage > Projects > New     # create project + set main repo
 
-# Architect creates worktrees for agents
-/pmux workspace > create          # select agent -> creates ~/myapp-AgentName
+# Architect creates agents with workspaces
+/pmux manage > Agents > New       # name + role + optional worktree
 
-# Agent starts Pi in their worktree
+# Agent starts Pi in their worktree and joins
 cd ~/myapp-Negin && pi
-/pmux join                        # auto-detects workspace
+/pmux join                        # select project → select agent
 
 # Agent syncs from main when needed
 /pmux workspace > sync            # fetch + rebase from main
