@@ -560,7 +560,7 @@ export default function (pi: ExtensionAPI) {
 
     async execute(_id, params) {
       if (!mySession || !myId || !myName) {
-        throw new Error("Not registered. Use /pmux join first.");
+        throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
       }
 
       const target = await resolveAgent(params.to, mySession);
@@ -611,7 +611,7 @@ export default function (pi: ExtensionAPI) {
 
     async execute(_id, params) {
       if (!mySession || !myId || !myName) {
-        throw new Error("Not registered. Use /pmux join first.");
+        throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
       }
 
       let agents: AgentInfo[];
@@ -663,7 +663,7 @@ export default function (pi: ExtensionAPI) {
 
     async execute() {
       if (!mySession || !myId) {
-        throw new Error("Not registered. Use /pmux join first.");
+        throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
       }
 
       const sections: string[] = [];
@@ -717,7 +717,7 @@ export default function (pi: ExtensionAPI) {
 
       switch (params.action) {
         case "claim": {
-          if (!myId || !myName) throw new Error("Not registered. Use /pmux join first.");
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
           if (!params.paths?.length) throw new Error("Paths are required for claim.");
 
           const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
@@ -736,7 +736,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         case "release": {
-          if (!myId) throw new Error("Not registered. Use /pmux join first.");
+          if (!myId) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
           if (!params.paths?.length) throw new Error("Paths are required for release.");
 
           const released = await release(mySession, params.paths, myId);
@@ -833,7 +833,7 @@ export default function (pi: ExtensionAPI) {
       switch (params.action) {
         // -- add ----------------------------------------------
         case "add": {
-          if (!myName) throw new Error("Not registered. Use /pmux join first.");
+          if (!myName) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
           if (!params.title) throw new Error("Title is required for add.");
 
           const now = new Date().toISOString();
@@ -907,7 +907,7 @@ export default function (pi: ExtensionAPI) {
 
         // -- assign -------------------------------------------
         case "assign": {
-          if (!myId || !myName) throw new Error("Not registered. Use /pmux join first.");
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
           if (!params.id) throw new Error("Task ID is required for assign.");
           if (!params.to) throw new Error("Target agent name is required for assign.");
 
@@ -965,7 +965,7 @@ export default function (pi: ExtensionAPI) {
 
         // -- pick ---------------------------------------------
         case "pick": {
-          if (!myId || !myName) throw new Error("Not registered. Use /pmux join first.");
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
 
           const tasks = await readBacklog(mySession);
           let task: Task | undefined;
@@ -1046,7 +1046,7 @@ export default function (pi: ExtensionAPI) {
 
         // -- done ---------------------------------------------
         case "done": {
-          if (!myId) throw new Error("Not registered. Use /pmux join first.");
+          if (!myId) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
           if (!params.id) throw new Error("Task ID is required for done.");
 
           const tasks = await readBacklog(mySession);
@@ -1084,7 +1084,7 @@ export default function (pi: ExtensionAPI) {
 
         // -- drop ---------------------------------------------
         case "drop": {
-          if (!myId) throw new Error("Not registered. Use /pmux join first.");
+          if (!myId) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
           if (!params.id) throw new Error("Task ID is required for drop.");
 
           const tasks = await readBacklog(mySession);
@@ -1123,7 +1123,7 @@ export default function (pi: ExtensionAPI) {
 
         // -- block --------------------------------------------
         case "block": {
-          if (!myId) throw new Error("Not registered. Use /pmux join first.");
+          if (!myId) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
           if (!params.id) throw new Error("Task ID is required for block.");
           if (!params.reason) throw new Error("Reason is required for block.");
 
@@ -1186,7 +1186,7 @@ export default function (pi: ExtensionAPI) {
 
       switch (params.action) {
         case "add": {
-          if (!myId || !myName) throw new Error("Not registered. Use /pmux join first.");
+          if (!myId || !myName) throw new Error("Not registered. Use /pmux manage to set up, then /pmux join.");
           if (!params.type) throw new Error("Entry type is required for add (decision, learning, or progress).");
           if (!params.content) throw new Error("Content is required for add.");
 
@@ -1261,7 +1261,7 @@ export default function (pi: ExtensionAPI) {
           return handleWorkspace(ctx);
         default:
           ctx.ui.notify(
-            `Unknown: /pmux ${sub}\n\nAvailable:\n  /pmux join       Join or create a project\n  /pmux leave   Leave current project\n  /pmux manage     Manage projects and agents\n  /pmux workspace  Git workspace setup and sync`,
+            `Unknown: /pmux ${sub}\n\nAvailable:\n  /pmux join       Join a project as an agent\n  /pmux leave   Leave current project\n  /pmux manage     Manage projects and agents\n  /pmux workspace  Git workspace setup and sync`,
             "warning"
           );
       }
@@ -1273,7 +1273,7 @@ export default function (pi: ExtensionAPI) {
   async function handleStatus(ctx: ExtensionContext): Promise<void> {
     if (!mySession || !myId) {
       ctx.ui.notify(
-        "Not in a project.\n\n  /pmux join       Join or create a project",
+        "Not in a project.\n\n  /pmux join       Join a project as an agent",
         "info"
       );
       return;
@@ -1296,7 +1296,7 @@ export default function (pi: ExtensionAPI) {
   // -- join handler --
 
   async function handleJoin(projectArg: string, ctx: ExtensionContext): Promise<void> {
-    // 1. Select or create project
+    // 1. Select project (no creation -- use /pmux manage)
     let project = projectArg.trim();
 
     if (!project) {
@@ -1308,20 +1308,25 @@ export default function (pi: ExtensionAPI) {
           .map((d) => d.name);
       } catch {}
 
-      const CREATE_PROJECT = "+ Create new project";
-      if (existing.length > 0) {
-        const choice = await ctx.ui.select("Join project:", [...existing, CREATE_PROJECT]);
-        if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
-        project = choice === CREATE_PROJECT
-          ? (await ctx.ui.input("Project name:")) ?? ""
-          : choice;
-      } else {
-        project = (await ctx.ui.input("Project name:")) ?? "";
+      if (existing.length === 0) {
+        ctx.ui.notify("No projects yet. Use /pmux manage to create one.", "info");
+        return;
       }
-      if (!project) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+      const choice = await ctx.ui.select("Join project:", existing);
+      if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
+      project = choice;
     }
 
-    // If switching agents (same or different project), go offline first
+    // Verify project exists
+    const sessionsDir = join(homedir(), ".pmux", "sessions");
+    const { existsSync } = await import("node:fs");
+    if (!existsSync(join(sessionsDir, project))) {
+      ctx.ui.notify(`Project "${project}" not found. Use /pmux manage to create it.`, "info");
+      return;
+    }
+
+    // If switching agents, go offline first
     const previousAgentId = myId;
     if (myId && mySession) {
       await goOffline(mySession, myId);
@@ -1330,146 +1335,57 @@ export default function (pi: ExtensionAPI) {
 
     mySession = project;
 
-    // Ensure project directory + config exist
-    const config = await readSessionConfig(mySession);
-    if (!config.createdAt) {
-      config.createdAt = new Date().toISOString();
-      await writeSessionConfig(mySession, config);
-    }
-
-    // 2. Agent selection
+    // 2. Select agent (no creation -- use /pmux manage)
     const registry = await readRegistry(mySession);
     const allAgents = Object.values(registry);
-    const onlineAgents = allAgents.filter((a) => a.status === "online");
     const offlineAgents = allAgents.filter((a) => a.status === "offline" && a.id !== previousAgentId);
+    const onlineAgents = allAgents.filter((a) => a.status === "online");
 
-    const CREATE_AGENT = "+ Create new agent";
-    let agentChoice: string | undefined;
-
-    if (offlineAgents.length > 0) {
-      const options = offlineAgents.map((a) => {
-        const roleLabel = a.roleName ? ` (${a.roleName})` : "";
-        return `${a.name}${roleLabel}`;
-      });
-      agentChoice = await ctx.ui.select("Join as:", [...options, CREATE_AGENT]);
-      if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-    } else if (onlineAgents.length > 0) {
-      const names = onlineAgents.map((a) => a.name).join(", ");
-      agentChoice = await ctx.ui.select(
-        `${onlineAgents.length} agent(s) online (${names}), none available:`,
-        [CREATE_AGENT]
-      );
-      if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-    } else {
-      agentChoice = await ctx.ui.select(
-        `No agents in "${project}" yet:`,
-        [CREATE_AGENT]
-      );
-      if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
+    if (offlineAgents.length === 0 && onlineAgents.length === 0) {
+      ctx.ui.notify(`No agents in "${project}". Use /pmux manage to create one.`, "info");
+      return;
     }
 
-    if (agentChoice === CREATE_AGENT) {
-      // -- Create new agent --
-      const name = await ctx.ui.input("Agent name:");
-      if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-      // Role selection: project roles + built-in templates + create new
-      const projectRoles = await readRoles(mySession);
-      const CREATE_ROLE = "+ Create new role";
-
-      // Merge: project roles first, then built-ins (skip duplicates)
-      const allRoles: RoleDefinition[] = [
-        ...Object.values(projectRoles),
-        ...BUILTIN_ROLES.filter((r) => !projectRoles[r.name]),
-      ];
-
-      const roleOptions = [
-        ...allRoles.map((r) => {
-          const desc = r.description || r.instructions.slice(0, 60);
-          return `${r.name} -- ${desc}`;
-        }),
-        CREATE_ROLE,
-      ];
-
-      let roleName: string | undefined;
-      let roleInstructions: string | undefined;
-
-      const roleChoice = await ctx.ui.select("Role:", roleOptions);
-      if (roleChoice && roleChoice !== CREATE_ROLE) {
-        const selectedRoleName = roleChoice.split(" -- ")[0]!;
-        const role = allRoles.find((r) => r.name === selectedRoleName);
-        if (role) {
-          roleName = role.name;
-          roleInstructions = role.instructions;
-          // If built-in, copy to project roles for customization
-          if (!projectRoles[role.name]) {
-            await addRole(mySession, role);
-          }
-        }
-      } else if (roleChoice === CREATE_ROLE) {
-        const newName = await ctx.ui.input("Role name:");
-        if (!newName) { ctx.ui.notify("Cancelled.", "info"); return; }
-        const newDesc = await ctx.ui.input("Short description:");
-        if (!newDesc) { ctx.ui.notify("Cancelled.", "info"); return; }
-        const newInstr = await ctx.ui.input("Full instructions:");
-        if (!newInstr) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-        const newRole: RoleDefinition = { name: newName, description: newDesc, instructions: newInstr };
-        await addRole(mySession, newRole);
-        roleName = newName;
-        roleInstructions = newInstr;
-      }
-
-      myId = newAgentId();
-      myName = name;
-      myRoleName = roleName;
-      myRole = roleName ?? `Agent ${name}`;
-      myRoleInstructions = roleInstructions;
-
-      const agent: AgentInfo = {
-        id: myId,
-        name: myName,
-        session: mySession,
-        role: myRole,
-        roleName: myRoleName,
-        cwd: ctx.cwd,
-        pid: process.pid,
-        status: "online",
-        registeredAt: new Date().toISOString(),
-        lastHeartbeat: new Date().toISOString(),
-      };
-      await registerAgent(mySession, agent);
-      await startAgent(ctx);
-
-      const roleNote = roleName ? ` with role "${roleName}"` : "";
-      ctx.ui.notify(`Joined "${project}" as "${name}"${roleNote}.`, "info");
-
-    } else {
-      // -- Resume existing agent --
-      const selectedName = agentChoice.split(" (")[0]!;
-      const agent = offlineAgents.find((a) => a.name === selectedName);
-      if (!agent) { ctx.ui.notify("Agent not found.", "error"); return; }
-
-      myId = agent.id;
-      myName = agent.name;
-      myRole = agent.role;
-      myRoleName = agent.roleName;
-      if (agent.roleName) {
-        await loadRoleInstructions(mySession, agent.roleName);
-      }
-
-      await updateAgent(mySession, myId, { cwd: ctx.cwd });
-      await startAgent(ctx);
-
-      const pending = getRecoverableMessages(mySession, myId);
-      const pendingNote = pending.length > 0 ? ` ${pending.length} message(s) waiting.` : "";
+    if (offlineAgents.length === 0) {
+      const names = onlineAgents.map((a) => a.name).join(", ");
       ctx.ui.notify(
-        `Joined "${project}" as "${myName}" (${myRoleName || "no role"}).${pendingNote}`,
+        `All agents in "${project}" are online (${names}). Use /pmux manage to create another.`,
         "info"
       );
+      return;
     }
+
+    const options = offlineAgents.map((a) => {
+      const roleLabel = a.roleName ? ` (${a.roleName})` : "";
+      return `${a.name}${roleLabel}`;
+    });
+
+    const agentChoice = await ctx.ui.select("Join as:", options);
+    if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+    // Resume selected agent
+    const selectedName = agentChoice.split(" (")[0]!;
+    const agent = offlineAgents.find((a) => a.name === selectedName);
+    if (!agent) { ctx.ui.notify("Agent not found.", "error"); return; }
+
+    myId = agent.id;
+    myName = agent.name;
+    myRole = agent.role;
+    myRoleName = agent.roleName;
+    if (agent.roleName) {
+      await loadRoleInstructions(mySession, agent.roleName);
+    }
+
+    await updateAgent(mySession, myId, { cwd: ctx.cwd });
+    await startAgent(ctx);
+
+    const pending = getRecoverableMessages(mySession, myId);
+    const pendingNote = pending.length > 0 ? `\n${pending.length} message(s) waiting.` : "";
+    const wsNote = agent.workspace ? `\nWorkspace: ${agent.workspace}` : "";
+    ctx.ui.notify(
+      `Joined "${project}" as "${myName}" (${myRoleName || "no role"}).${wsNote}${pendingNote}`,
+      "info"
+    );
   }
 
   // -- leave handler --
@@ -1523,42 +1439,75 @@ export default function (pi: ExtensionAPI) {
         .map((d) => d.name);
     } catch {}
 
-    const ADD_PROJECT = "+ New project";
-    const options = [...projects, ADD_PROJECT];
+    const NEW_PROJECT = "+ New project";
+    const options = [...projects, NEW_PROJECT];
 
     const choice = await ctx.ui.select("Projects:", options);
     if (!choice) return;
 
-    if (choice === ADD_PROJECT) {
+    if (choice === NEW_PROJECT) {
       const name = await ctx.ui.input("Project name:");
       if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
       const { mkdirSync: mkDir } = await import("node:fs");
-      const projectDir = join(sessionsDir, name);
-      mkDir(projectDir, { recursive: true });
-      await writeSessionConfig(name, { createdAt: new Date().toISOString() });
+      mkDir(join(sessionsDir, name), { recursive: true });
 
-      ctx.ui.notify(`Project "${name}" created.`, "info");
+      const newConfig: SessionConfig = { createdAt: new Date().toISOString() };
+
+      // Offer to set main repo
+      const setRepo = await ctx.ui.confirm("Main repo?", "Set current directory as the main repo for this project?");
+      if (setRepo) {
+        const gitCheck = await pi.exec("git", ["rev-parse", "--show-toplevel"], { timeout: 5000 });
+        if (gitCheck.code !== 0) {
+          const initGit = await ctx.ui.confirm("Not a git repo", "Current directory is not a git repo. Initialize one?");
+          if (initGit) {
+            await pi.exec("git", ["init"], { timeout: 5000 });
+          }
+        }
+        newConfig.mainRepo = ctx.cwd;
+      }
+
+      await writeSessionConfig(name, newConfig);
+
+      // If current agent is joined, set their workspace too
+      if (setRepo && myId && mySession === name) {
+        await updateAgent(mySession, myId, { workspace: ctx.cwd });
+      }
+
+      ctx.ui.notify(`Project "${name}" created.${newConfig.mainRepo ? "\nMain repo: " + newConfig.mainRepo : ""}`, "info");
       return;
     }
 
     const project = choice;
 
-    const action = await ctx.ui.select(`Project "${project}":`, ["Rename", "Delete"]);
+    // Check for online agents
+    const onlineCount = (await getOnlineAgents(project)).length;
+
+    const actions = ["Set main repo", "Rename", "Delete"];
+    const action = await ctx.ui.select(`Project "${project}":`, actions);
     if (!action) return;
 
-    // Check for online agents
-    const agents = await getOnlineAgents(project);
-    if (agents.length > 0) {
-      const names = agents.map((a) => a.name).join(", ");
-      ctx.ui.notify(
-        `Cannot ${action.toLowerCase()} "${project}": ${agents.length} agent(s) online (${names}).\nThey must /pmux leave first.`,
-        "warning"
-      );
-      return;
-    }
+    if (action === "Set main repo") {
+      const gitCheck = await pi.exec("git", ["rev-parse", "--show-toplevel"], { timeout: 5000 });
+      if (gitCheck.code !== 0) {
+        const initGit = await ctx.ui.confirm("Not a git repo", "Current directory is not a git repo. Initialize one?");
+        if (initGit) {
+          await pi.exec("git", ["init"], { timeout: 5000 });
+        } else {
+          return;
+        }
+      }
 
-    if (action === "Delete") {
+      const config = await readSessionConfig(project);
+      config.mainRepo = ctx.cwd;
+      await writeSessionConfig(project, config);
+      ctx.ui.notify(`Main repo set to: ${ctx.cwd}`, "info");
+
+    } else if (action === "Delete") {
+      if (onlineCount > 0) {
+        ctx.ui.notify(`Cannot delete: ${onlineCount} agent(s) online. They must /pmux leave first.`, "warning");
+        return;
+      }
       const confirm = await ctx.ui.confirm("Delete project?", `Permanently delete "${project}" and all its data?`);
       if (!confirm) { ctx.ui.notify("Cancelled.", "info"); return; }
 
@@ -1567,13 +1516,17 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(`Deleted project "${project}".`, "info");
 
     } else if (action === "Rename") {
+      if (onlineCount > 0) {
+        ctx.ui.notify(`Cannot rename: ${onlineCount} agent(s) online. They must /pmux leave first.`, "warning");
+        return;
+      }
       const newName = await ctx.ui.input("New name:", project);
       if (!newName || newName === project) { ctx.ui.notify("Cancelled.", "info"); return; }
 
       const { renameSync, readFileSync: readF, writeFileSync: writeF } = await import("node:fs");
       renameSync(join(sessionsDir, project), join(sessionsDir, newName));
 
-      // Update session field in all agent records
+      // Update session field in agent records
       try {
         const agentsPath = join(sessionsDir, newName, "agents.json");
         const agents = JSON.parse(readF(agentsPath, "utf8"));
@@ -1597,18 +1550,18 @@ export default function (pi: ExtensionAPI) {
     const allAgents = Object.values(registry);
     const offlineAgents = allAgents.filter((a) => a.status === "offline");
 
-    const ADD_AGENT = "+ New agent";
+    const NEW_AGENT = "+ New agent";
     const options = [
       ...offlineAgents.map((a) => {
         const roleLabel = a.roleName ? ` (${a.roleName})` : "";
         return `${a.name}${roleLabel}`;
       }),
-      ADD_AGENT,
+      NEW_AGENT,
     ];
     const selected = await ctx.ui.select("Agents:", options);
     if (!selected) return;
 
-    if (selected === ADD_AGENT) {
+    if (selected === NEW_AGENT) {
       const name = await ctx.ui.input("Agent name:");
       if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
@@ -1628,10 +1581,44 @@ export default function (pi: ExtensionAPI) {
         const roleChoice = await ctx.ui.select("Role:", roleOptions);
         if (roleChoice) {
           roleName = roleChoice.split(" -- ")[0]!;
-          // Copy built-in to project if needed
           if (!projectRoles[roleName]) {
             const role = allRoles.find((r) => r.name === roleName);
             if (role) await addRole(mySession, role);
+          }
+        }
+      }
+
+      // Optional workspace
+      let workspace: string | undefined;
+      const config = await readSessionConfig(mySession);
+      if (config.mainRepo) {
+        const createWs = await ctx.ui.confirm("Workspace?", `Create a git worktree for "${name}"?`);
+        if (createWs) {
+          const { basename: bn, dirname: dn } = await import("node:path");
+          const repoName = bn(config.mainRepo);
+          const parentDir = dn(config.mainRepo);
+          const defaultPath = `${parentDir}/${repoName}-${name}`;
+
+          const wsPath = await ctx.ui.input("Worktree path:", defaultPath);
+          if (wsPath) {
+            const branchName = `agent/${name}`;
+            const result = await pi.exec(
+              "git", ["-C", config.mainRepo, "worktree", "add", wsPath, "-b", branchName],
+              { timeout: 30000 }
+            );
+            if (result.code !== 0) {
+              const retry = await pi.exec(
+                "git", ["-C", config.mainRepo, "worktree", "add", wsPath, branchName],
+                { timeout: 30000 }
+              );
+              if (retry.code !== 0) {
+                ctx.ui.notify(`Workspace failed: ${retry.stderr}`, "warning");
+              } else {
+                workspace = wsPath;
+              }
+            } else {
+              workspace = wsPath;
+            }
           }
         }
       }
@@ -1642,7 +1629,8 @@ export default function (pi: ExtensionAPI) {
         session: mySession,
         role: roleName ?? `Agent ${name}`,
         roleName,
-        cwd: ctx.cwd,
+        workspace,
+        cwd: workspace || ctx.cwd,
         pid: 0,
         status: "offline",
         registeredAt: new Date().toISOString(),
@@ -1650,10 +1638,14 @@ export default function (pi: ExtensionAPI) {
       };
       await registerAgent(mySession, agent);
 
-      ctx.ui.notify(`Agent "${name}" created (offline). They can /pmux join to connect.`, "info");
+      let msg = `Agent "${name}" created (offline).`;
+      if (workspace) msg += `\nWorkspace: ${workspace}`;
+      msg += `\nThey can start Pi${workspace ? " in " + workspace : ""} and /pmux join.`;
+      ctx.ui.notify(msg, "info");
       return;
     }
 
+    // Selected existing agent
     const selectedName = selected.split(" (")[0]!;
     const agent = offlineAgents.find((a) => a.name === selectedName);
     if (!agent) return;
@@ -1664,20 +1656,15 @@ export default function (pi: ExtensionAPI) {
     if (action === "Delete") {
       const confirm = await ctx.ui.confirm("Delete agent?", `Permanently delete "${agent.name}"?`);
       if (!confirm) { ctx.ui.notify("Cancelled.", "info"); return; }
-
       await removeAgent(mySession, agent.id);
       ctx.ui.notify(`Deleted agent "${agent.name}".`, "info");
-
     } else if (action === "Rename") {
       const newName = await ctx.ui.input("New name:", agent.name);
       if (!newName || newName === agent.name) { ctx.ui.notify("Cancelled.", "info"); return; }
-
       await updateAgent(mySession, agent.id, { name: newName });
       ctx.ui.notify(`Renamed "${agent.name}" to "${newName}".`, "info");
     }
   }
-
-
 
   async function manageRoles(ctx: ExtensionContext): Promise<void> {
     if (!mySession) {
@@ -1732,137 +1719,36 @@ export default function (pi: ExtensionAPI) {
   // -- workspace handler --
 
   async function handleWorkspace(ctx: ExtensionContext): Promise<void> {
-    const action = await ctx.ui.select("Workspace:", ["setup", "create", "sync", "status"]);
+    if (!mySession || !myId) {
+      ctx.ui.notify("Join a project first with /pmux join.", "warning");
+      return;
+    }
+
+    const action = await ctx.ui.select("Workspace:", ["sync", "status"]);
     if (!action) return;
 
+    const agent = await findById(mySession, myId);
+    const workDir = agent?.workspace || ctx.cwd;
+    const config = await readSessionConfig(mySession);
+
     switch (action) {
-      case "setup": {
-        if (!mySession || !myId) { ctx.ui.notify("Join a project first with /pmux join.", "warning"); return; }
-
-        // Check if cwd is a git repo
-        const gitCheck = await pi.exec("git", ["rev-parse", "--show-toplevel"], { timeout: 5000 });
-        if (gitCheck.code !== 0) {
-          ctx.ui.notify("Current directory is not a git repository.", "warning");
-          return;
-        }
-
-        const repoPath = gitCheck.stdout.trim();
-
-        // Set main repo in project config
-        const config = await readSessionConfig(mySession);
-        config.mainRepo = repoPath;
-        await writeSessionConfig(mySession, config);
-
-        // Set current agent's workspace to cwd
-        await updateAgent(mySession, myId, { workspace: ctx.cwd });
-
-        const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 5000 });
-        const branch = branchResult.stdout.trim() || "main";
-
-        ctx.ui.notify(`Main repo set to: ${repoPath}\nYour workspace: ${ctx.cwd}\nBranch: ${branch}`, "info");
-        break;
-      }
-
-      case "create": {
-        if (!mySession || !myId) {
-          ctx.ui.notify("Join a project first with /pmux join.", "warning");
-          return;
-        }
-
-        const config = await readSessionConfig(mySession);
-        if (!config.mainRepo) {
-          ctx.ui.notify("No main repo configured. Run /pmux workspace > setup first.", "warning");
-          return;
-        }
-
-        // Select which agent to create workspace for
-        const registry = await readRegistry(mySession);
-        const agents = Object.values(registry).filter((a) => !a.workspace && a.id !== myId);
-
-        if (agents.length === 0) {
-          ctx.ui.notify("All agents already have workspaces (or no other agents in project).", "info");
-          return;
-        }
-
-        const agentOptions = agents.map((a) => {
-          const roleLabel = a.roleName ? ` (${a.roleName})` : "";
-          return `${a.name}${roleLabel}`;
-        });
-        const agentChoice = await ctx.ui.select("Create workspace for:", agentOptions);
-        if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-        const targetName = agentChoice.split(" (")[0]!;
-        const targetAgent = agents.find((a) => a.name === targetName);
-        if (!targetAgent) { ctx.ui.notify("Agent not found.", "error"); return; }
-
-        // Default worktree path: sibling of main repo
-        const { basename: bn, dirname: dn } = await import("node:path");
-        const repoName = bn(config.mainRepo);
-        const parentDir = dn(config.mainRepo);
-        const defaultPath = `${parentDir}/${repoName}-${targetName}`;
-
-        const worktreePath = await ctx.ui.input("Worktree path:", defaultPath);
-        if (!worktreePath) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-        const branchName = `agent/${targetName}`;
-
-        // Create worktree
-        const result = await pi.exec(
-          "git",
-          ["-C", config.mainRepo, "worktree", "add", worktreePath, "-b", branchName],
-          { timeout: 30000 }
-        );
-
-        if (result.code !== 0) {
-          const retry = await pi.exec(
-            "git",
-            ["-C", config.mainRepo, "worktree", "add", worktreePath, branchName],
-            { timeout: 30000 }
-          );
-          if (retry.code !== 0) {
-            ctx.ui.notify(`Failed to create worktree: ${retry.stderr}`, "error");
-            return;
-          }
-        }
-
-        // Store workspace path in target agent's record
-        await updateAgent(mySession, targetAgent.id, { workspace: worktreePath });
-
-        ctx.ui.notify(
-          `Workspace created for ${targetName}:\n  Path: ${worktreePath}\n  Branch: ${branchName}\n\n${targetName} can start Pi there and /pmux join.`,
-          "info"
-        );
-        break;
-      }
-
       case "sync": {
-        if (!mySession || !myId) {
-          ctx.ui.notify("Join a project first.", "warning");
-          return;
-        }
-
-        const agent = await findById(mySession, myId);
-        const workDir = agent?.workspace || ctx.cwd;
-
-        const config = await readSessionConfig(mySession);
         if (!config.mainRepo) {
-          ctx.ui.notify("No main repo configured.", "warning");
+          ctx.ui.notify("No main repo configured for this project.", "warning");
           return;
         }
 
-        // Get main branch name
         const mainBranch = await pi.exec(
           "git", ["-C", config.mainRepo, "branch", "--show-current"],
           { timeout: 5000 }
         );
         const mainBranchName = mainBranch.stdout.trim() || "main";
 
-        // Fetch and rebase
         const fetch = await pi.exec("git", ["-C", workDir, "fetch", "origin"], { timeout: 30000 });
         const rebase = await pi.exec("git", ["-C", workDir, "rebase", mainBranchName], { timeout: 30000 });
 
         if (rebase.code !== 0) {
-          ctx.ui.notify(`Rebase conflicts:\n${rebase.stderr}\n\nResolve conflicts, then: git rebase --continue`, "warning");
+          ctx.ui.notify(`Rebase conflicts:\n${rebase.stderr}\n\nResolve, then: git rebase --continue`, "warning");
         } else {
           ctx.ui.notify(`Synced with ${mainBranchName}. Up to date.`, "info");
         }
@@ -1870,30 +1756,15 @@ export default function (pi: ExtensionAPI) {
       }
 
       case "status": {
-        if (!mySession || !myId) {
-          ctx.ui.notify("Join a project first.", "warning");
-          return;
-        }
-
-        const agent = await findById(mySession, myId);
-        const workDir = agent?.workspace || ctx.cwd;
-
         const branch = await pi.exec("git", ["-C", workDir, "branch", "--show-current"], { timeout: 5000 });
         const status = await pi.exec("git", ["-C", workDir, "status", "--short"], { timeout: 5000 });
 
-        const config = await readSessionConfig(mySession);
         const mainBranchName = config.mainRepo
           ? (await pi.exec("git", ["-C", config.mainRepo, "branch", "--show-current"], { timeout: 5000 })).stdout.trim() || "main"
           : "main";
 
-        const ahead = await pi.exec(
-          "git", ["-C", workDir, "rev-list", "--count", `${mainBranchName}..HEAD`],
-          { timeout: 5000 }
-        );
-        const behind = await pi.exec(
-          "git", ["-C", workDir, "rev-list", "--count", `HEAD..${mainBranchName}`],
-          { timeout: 5000 }
-        );
+        const ahead = await pi.exec("git", ["-C", workDir, "rev-list", "--count", `${mainBranchName}..HEAD`], { timeout: 5000 });
+        const behind = await pi.exec("git", ["-C", workDir, "rev-list", "--count", `HEAD..${mainBranchName}`], { timeout: 5000 });
 
         const dirtyFiles = status.stdout.trim();
         const dirtyCount = dirtyFiles ? dirtyFiles.split("\n").length : 0;
@@ -1903,16 +1774,14 @@ export default function (pi: ExtensionAPI) {
         info += `\nAhead of ${mainBranchName}: ${ahead.stdout.trim()} commits`;
         info += `\nBehind ${mainBranchName}: ${behind.stdout.trim()} commits`;
         info += `\nDirty files: ${dirtyCount}`;
-
-        if (dirtyFiles) {
-          info += `\n\n${dirtyFiles}`;
-        }
+        if (dirtyFiles) info += `\n\n${dirtyFiles}`;
 
         ctx.ui.notify(info, "info");
         break;
       }
     }
   }
+
 
   // -- Helpers --------------------------------------------------
 
