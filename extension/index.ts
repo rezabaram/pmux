@@ -1592,8 +1592,20 @@ export default function (pi: ExtensionAPI) {
       let workspace: string | undefined;
       const config = await readSessionConfig(mySession);
       if (config.mainRepo) {
-        const createWs = await ctx.ui.confirm("Workspace?", `Create a git worktree for "${name}"?`);
-        if (createWs) {
+        // Check if current directory is already used by another agent
+        const currentDirUsed = allAgents.some((a) => a.workspace === ctx.cwd);
+        const wsOptions: string[] = ["New worktree"];
+        if (!currentDirUsed) {
+          wsOptions.push("Use current directory");
+        }
+        wsOptions.push("No workspace");
+
+        const wsChoice = await ctx.ui.select("Workspace:", wsOptions);
+
+        if (wsChoice === "Use current directory") {
+          workspace = ctx.cwd;
+
+        } else if (wsChoice === "New worktree") {
           const { basename: bn, dirname: dn } = await import("node:path");
           const repoName = bn(config.mainRepo);
           const parentDir = dn(config.mainRepo);
@@ -1621,6 +1633,7 @@ export default function (pi: ExtensionAPI) {
             }
           }
         }
+        // "No workspace" → workspace stays undefined
       }
 
       const agent: AgentInfo = {
