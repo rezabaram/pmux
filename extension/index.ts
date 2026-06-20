@@ -342,17 +342,17 @@ export default function (pi: ExtensionAPI) {
       extra += `\n\n## Recent Journal\n${journalLines.join("\n")}`;
     }
 
-    // Gather online agents
-    const onlineAgents = await getOnlineAgents(mySession);
-    const sameSessionOthers = onlineAgents.filter((a) => a.id !== myId);
+    // Gather all agents in this project (online + offline)
+    const registry = await readRegistry(mySession);
+    const projectAgents = Object.values(registry).filter((a) => a.id !== myId);
 
-    // Cross-session agents
+    // Cross-session agents (online only)
     const allAgents = await readAllRegistries();
     const crossSessionAgents = allAgents.filter(
       (a) => a.session !== mySession && a.status === "online"
     );
 
-    const hasOthers = sameSessionOthers.length > 0 || crossSessionAgents.length > 0;
+    const hasOthers = projectAgents.length > 0 || crossSessionAgents.length > 0;
 
     if (!hasOthers && !extra) return;
 
@@ -361,15 +361,16 @@ export default function (pi: ExtensionAPI) {
       extra += `\nYou are agent "${myName}" in session "${mySession}" (full address: ${myAddress()}).`;
       if (myRoleName) extra += `\nRole: ${myRoleName}.`;
 
-      if (sameSessionOthers.length > 0) {
-        const list = sameSessionOthers
+      if (projectAgents.length > 0) {
+        const list = projectAgents
           .map((a) => {
-            const parts = [a.roleName || a.role, a.name].filter(Boolean);
-            return `  - ${a.name} (${formatAddress(a.session, a.name)}): ${parts.join(":")} [${a.status}]`;
+            const roleLabel = a.roleName || a.role;
+            return `  - ${a.name} (${roleLabel}) [${a.status}]`;
           })
           .join("\n");
         extra += `\n\nSame-session agents (address as "${mySession}/<name>" or just "<name>"):\n${list}`;
       }
+
 
       if (crossSessionAgents.length > 0) {
         const list = crossSessionAgents
