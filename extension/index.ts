@@ -1489,8 +1489,19 @@ export default function (pi: ExtensionAPI) {
       const newName = await ctx.ui.input("New name:", project);
       if (!newName || newName === project) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-      const { renameSync } = await import("node:fs");
+      const { renameSync, readFileSync: readF, writeFileSync: writeF } = await import("node:fs");
       renameSync(join(sessionsDir, project), join(sessionsDir, newName));
+
+      // Update session field in all agent records
+      try {
+        const agentsPath = join(sessionsDir, newName, "agents.json");
+        const agents = JSON.parse(readF(agentsPath, "utf8"));
+        for (const agent of Object.values(agents) as AgentInfo[]) {
+          agent.session = newName;
+        }
+        writeF(agentsPath, JSON.stringify(agents, null, 2), "utf8");
+      } catch {}
+
       ctx.ui.notify(`Renamed "${project}" to "${newName}".`, "info");
     }
   }
