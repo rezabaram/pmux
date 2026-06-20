@@ -1,12 +1,12 @@
 /**
- * pmux — Pi Multi-Agent Coordination
+ * pmux  -- Pi Multi-Agent Coordination
  *
  * Terminal-agnostic multi-agent coordination for Pi.
  * Communication uses file-based inboxes.
  *
  * Agent lifecycle:
- *   /pmux_join      — join or create a project, pick or create an agent
- *   session shutdown — agent goes offline (persists for later)
+ *   /pmux_join       -- join or create a project, pick or create an agent
+ *   session shutdown  -- agent goes offline (persists for later)
  *
  * Tools: pmux_role, pmux_list, pmux_send, pmux_broadcast,
  *         pmux_reserve, pmux_task, pmux_journal
@@ -79,8 +79,8 @@ import {
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
 export default function (pi: ExtensionAPI) {
-  // ── State ────────────────────────────────────────────────────
-  let myId: string | undefined; // UUID — stable across restarts
+  // -- State ----------------------------------------------------
+  let myId: string | undefined; // UUID  -- stable across restarts
   let myName: string | undefined;
   let myRole: string | undefined;
   let myRoleName: string | undefined;
@@ -99,7 +99,7 @@ export default function (pi: ExtensionAPI) {
     return myRoleName ? `[pmux:${addr} (${myRoleName})]` : `[pmux:${addr}]`;
   }
 
-  // ── Agent Startup/Shutdown Helpers ───────────────────────────
+  // -- Agent Startup/Shutdown Helpers ---------------------------
 
   /** Common setup after register or login. */
   async function startAgent(ctx: ExtensionContext): Promise<void> {
@@ -120,7 +120,7 @@ export default function (pi: ExtensionAPI) {
       }
     }, HEARTBEAT_INTERVAL_MS);
 
-    // Start inbox watcher — deliver messages via pi.sendUserMessage
+    // Start inbox watcher  -- deliver messages via pi.sendUserMessage
     if (inboxWatcher) inboxWatcher.close();
     inboxWatcher = watchInbox(mySession, myId, (msg, filename) => {
       // Crash-safe: history first, then mark delivered, then queue
@@ -188,7 +188,7 @@ export default function (pi: ExtensionAPI) {
     return true;
   }
 
-  // ── Lifecycle ────────────────────────────────────────────────
+  // -- Lifecycle ------------------------------------------------
 
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
@@ -225,7 +225,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (event) => {
     stopAgent();
 
-    // Mark offline (unless reloading — keep online for recovery)
+    // Mark offline (unless reloading  -- keep online for recovery)
     if (event.reason !== "reload" && mySession && myId) {
       await goOffline(mySession, myId).catch(() => {});
     }
@@ -233,7 +233,7 @@ export default function (pi: ExtensionAPI) {
     currentCtx = undefined;
   });
 
-  // ── Agent Status Tracking ────────────────────────────────────
+  // -- Agent Status Tracking ------------------------------------
 
   pi.on("agent_start", async () => {
     if (mySession && myId) {
@@ -244,7 +244,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async () => {
     if (mySession && myId) {
       await updateHeartbeat(mySession, myId).catch(() => {});
-      // Clean up .delivered files — messages confirmed processed
+      // Clean up .delivered files  -- messages confirmed processed
       confirmDelivered(mySession, myId);
       // Clean up stale reservations (held by offline agents)
       const online = await getOnlineAgents(mySession).catch(() => [] as AgentInfo[]);
@@ -256,7 +256,7 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ── File Reservation Warnings ────────────────────────────────
+  // -- File Reservation Warnings --------------------------------
 
   pi.on("tool_result", async (event) => {
     if (!mySession || !myId) return;
@@ -274,7 +274,7 @@ export default function (pi: ExtensionAPI) {
 
     const { reservedPath, reservation, stale } = conflict;
     const reasonStr = reservation.reason ? ` (${reservation.reason})` : "";
-    const staleNote = stale ? " [agent offline — stale reservation]" : "";
+    const staleNote = stale ? " [agent offline  -- stale reservation]" : "";
     const warning =
       `⚠️ ${filePath} is reserved by ${reservation.agent}${reasonStr}${staleNote}. ` +
       `Consider coordinating via pmux_send('${reservation.agent}', ...).`;
@@ -288,7 +288,7 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // ── System Prompt Injection ──────────────────────────────────
+  // -- System Prompt Injection ----------------------------------
 
   pi.on("before_agent_start", async (event) => {
     if (!mySession || !myName) return;
@@ -376,7 +376,7 @@ export default function (pi: ExtensionAPI) {
 - Reply using pmux_send with the sender's address.`;
     }
 
-    // Artifact paths — always include when agent has identity
+    // Artifact paths  -- always include when agent has identity
     if (myId) {
       extra += `\n\n### Shared Artifacts\nRead and write shared documents using the standard read/write/edit tools.`;
       extra += `\n- Project (all agents): ${projectArtifactsDir()}`;
@@ -386,9 +386,9 @@ export default function (pi: ExtensionAPI) {
     return { systemPrompt: event.systemPrompt + extra };
   });
 
-  // ── Tools ────────────────────────────────────────────────────
+  // -- Tools ----------------------------------------------------
 
-  // ─ pmux_role ─────────────────────────────────────────────────
+  // - pmux_role -------------------------------------------------
 
   pi.registerTool({
     name: "pmux_role",
@@ -410,7 +410,7 @@ export default function (pi: ExtensionAPI) {
       instructions: Type.Optional(
         Type.String({
           description:
-            'Instructions for the role — what the agent should do, focus on, and how to behave (required for "add")',
+            'Instructions for the role  -- what the agent should do, focus on, and how to behave (required for "add")',
         })
       ),
     }),
@@ -454,7 +454,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ pmux_list ─────────────────────────────────────────────────
+  // - pmux_list -------------------------------------------------
 
   pi.registerTool({
     name: "pmux_list",
@@ -509,20 +509,20 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ pmux_send ─────────────────────────────────────────────────
+  // - pmux_send -------------------------------------------------
 
   pi.registerTool({
     name: "pmux_send",
     label: "Send to Agent",
     description:
       'Send a message to another pmux agent. Use "name" for same-session or "session/name" for cross-session. ' +
-      "Delivered to the agent's inbox — works even if they're busy or offline.",
+      "Delivered to the agent's inbox  -- works even if they're busy or offline.",
     promptSnippet: "Send a message to a pmux agent by name or session/name address",
     promptGuidelines: [
       "Use pmux_list first to see which agents are available before using pmux_send.",
       "When using pmux_send, be specific about what you need from the other agent.",
       'For cross-session agents, use the full address in pmux_send: "session/name".',
-      "After using pmux_send, do not wait — continue with your own work unless you need their response first.",
+      "After using pmux_send, do not wait  -- continue with your own work unless you need their response first.",
     ],
     parameters: Type.Object({
       to: Type.String({ description: '"name" for same session, or "session/name" for cross-session' }),
@@ -564,14 +564,14 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ pmux_broadcast ────────────────────────────────────────────
+  // - pmux_broadcast --------------------------------------------
 
   pi.registerTool({
     name: "pmux_broadcast",
     label: "Broadcast",
     description:
       "Send a message to all other online agents. Set allSessions=true for cross-session. " +
-      "Use sparingly — prefer targeted pmux_send.",
+      "Use sparingly  -- prefer targeted pmux_send.",
     promptSnippet: "Broadcast a message to online pmux agents",
     parameters: Type.Object({
       message: Type.String({ description: "Message to broadcast" }),
@@ -621,7 +621,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ pmux_artifacts ────────────────────────────────────────────
+  // - pmux_artifacts --------------------------------------------
 
   pi.registerTool({
     name: "pmux_artifacts",
@@ -658,7 +658,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ pmux_reserve ──────────────────────────────────────────────
+  // - pmux_reserve ----------------------------------------------
 
   pi.registerTool({
     name: "pmux_reserve",
@@ -667,7 +667,7 @@ export default function (pi: ExtensionAPI) {
       "Manage file/directory reservations to prevent conflicts. " +
       "Actions: claim (reserve paths), release (free paths), list (show all). " +
       "Trailing slash = directory prefix, no slash = exact file.",
-    promptSnippet: "Manage file reservations — claim, release, list",
+    promptSnippet: "Manage file reservations  -- claim, release, list",
     promptGuidelines: [
       "Use pmux_reserve with action 'claim' before editing files other agents might work on.",
       "Trailing slash = directory prefix (e.g., 'src/auth/'), no slash = exact file.",
@@ -745,9 +745,9 @@ export default function (pi: ExtensionAPI) {
           const lines = entries.map(([path, res]) => {
             const elapsed = now - new Date(res.since).getTime();
             const duration = formatDuration(elapsed);
-            const reasonStr = res.reason ? ` — ${res.reason}` : "";
+            const reasonStr = res.reason ? `  -- ${res.reason}` : "";
             const stale = !onlineIds.has(res.agentId);
-            const staleStr = stale ? " [stale — agent offline]" : "";
+            const staleStr = stale ? " [stale  -- agent offline]" : "";
             const isMe = res.agentId === myId;
             const marker = isMe ? " (you)" : "";
             return `  ${path}  →  ${res.agent}${marker}${reasonStr} (${duration})${staleStr}`;
@@ -765,7 +765,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ pmux_task ─────────────────────────────────────────────────
+  // - pmux_task -------------------------------------------------
 
   pi.registerTool({
     name: "pmux_task",
@@ -775,12 +775,12 @@ export default function (pi: ExtensionAPI) {
       "assign (delegate to agent), pick (claim/accept task), done (complete), " +
       "drop (release back to queue), block (mark blocked). " +
       "Picking a task auto-reserves its files. Done/drop auto-releases them.",
-    promptSnippet: "Manage task backlog — add, list, assign, pick, done, drop, block",
+    promptSnippet: "Manage task backlog  -- add, list, assign, pick, done, drop, block",
     promptGuidelines: [
       "Use action 'pick' to claim the next available task or accept an assigned task.",
       "Picking a task auto-reserves its files. Done/drop auto-releases them.",
       "Use action 'done' with a summary when completing a task.",
-      "Use action 'assign' to delegate tasks — the assignee accepts by picking.",
+      "Use action 'assign' to delegate tasks  -- the assignee accepts by picking.",
     ],
     parameters: Type.Object({
       action: StringEnum(["add", "list", "assign", "pick", "done", "drop", "block"] as const),
@@ -802,7 +802,7 @@ export default function (pi: ExtensionAPI) {
       if (!mySession) throw new Error("pmux session not active");
 
       switch (params.action) {
-        // ── add ──────────────────────────────────────────────
+        // -- add ----------------------------------------------
         case "add": {
           if (!myName) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.title) throw new Error("Title is required for add.");
@@ -822,7 +822,7 @@ export default function (pi: ExtensionAPI) {
             params.urgent
           );
 
-          const urgentNote = params.urgent ? " (urgent — top of backlog)" : "";
+          const urgentNote = params.urgent ? " (urgent  -- top of backlog)" : "";
           const filesNote = task.files?.length ? `\n  Files: ${task.files.join(", ")}` : "";
           return {
             content: [{
@@ -833,7 +833,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // ── list ─────────────────────────────────────────────
+        // -- list ---------------------------------------------
         case "list": {
           const tasks = await readBacklog(mySession);
           let filtered = tasks;
@@ -856,7 +856,7 @@ export default function (pi: ExtensionAPI) {
             const assigneeStr = t.assignee
               ? t.status === "assigned"
                 ? ` → ${t.assignee} (pending)`
-                : ` — ${t.assignee}`
+                : `  -- ${t.assignee}`
               : "";
             const isMe = t.assigneeId === myId;
             const meMarker = isMe ? " (you)" : "";
@@ -877,7 +877,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // ── assign ───────────────────────────────────────────
+        // -- assign -------------------------------------------
         case "assign": {
           if (!myId || !myName) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.id) throw new Error("Task ID is required for assign.");
@@ -935,7 +935,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // ── pick ─────────────────────────────────────────────
+        // -- pick ---------------------------------------------
         case "pick": {
           if (!myId || !myName) throw new Error("Not registered. Use /pmux_join first.");
 
@@ -960,7 +960,7 @@ export default function (pi: ExtensionAPI) {
               throw new Error(`${params.id} is already done.`);
             }
           } else {
-            // Auto-pick: first "todo" task (skip "assigned" — those are spoken for)
+            // Auto-pick: first "todo" task (skip "assigned"  -- those are spoken for)
             task = tasks.find((t) => t.status === "todo");
             if (!task) {
               throw new Error(
@@ -977,7 +977,7 @@ export default function (pi: ExtensionAPI) {
           task.updatedAt = new Date().toISOString();
           await writeBacklog(mySession, tasks);
 
-          // Auto-reserve files (partial success — Option B)
+          // Auto-reserve files (partial success  -- Option B)
           const reserved: string[] = [];
           const conflicts: Array<{ path: string; detail: string }> = [];
 
@@ -1005,7 +1005,7 @@ export default function (pi: ExtensionAPI) {
           if (reserved.length > 0) text += `\n  Reserved: ${reserved.join(", ")}`;
           if (conflicts.length > 0) {
             for (const c of conflicts) {
-              text += `\n  ⚠️ Could not reserve: ${c.path} — ${c.detail}`;
+              text += `\n  ⚠️ Could not reserve: ${c.path}  -- ${c.detail}`;
             }
             text += `\n  → Consider coordinating via pmux_send.`;
           }
@@ -1016,7 +1016,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // ── done ─────────────────────────────────────────────
+        // -- done ---------------------------------------------
         case "done": {
           if (!myId) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.id) throw new Error("Task ID is required for done.");
@@ -1054,7 +1054,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // ── drop ─────────────────────────────────────────────
+        // -- drop ---------------------------------------------
         case "drop": {
           if (!myId) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.id) throw new Error("Task ID is required for drop.");
@@ -1084,7 +1084,7 @@ export default function (pi: ExtensionAPI) {
             released = await release(mySession, task.files, myId);
           }
 
-          let text = `✓ Dropped ${task.id}: ${task.title} — back in queue`;
+          let text = `✓ Dropped ${task.id}: ${task.title}  -- back in queue`;
           if (released.length > 0) text += `\n  Released: ${released.join(", ")}`;
 
           return {
@@ -1093,7 +1093,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // ── block ────────────────────────────────────────────
+        // -- block --------------------------------------------
         case "block": {
           if (!myId) throw new Error("Not registered. Use /pmux_join first.");
           if (!params.id) throw new Error("Task ID is required for block.");
@@ -1121,7 +1121,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ pmux_journal ────────────────────────────────────────────
+  // - pmux_journal --------------------------------------------
 
   pi.registerTool({
     name: "pmux_journal",
@@ -1135,7 +1135,7 @@ export default function (pi: ExtensionAPI) {
       "Use pmux_journal to record important decisions, things you've learned, and progress updates.",
       "Journal entries are shared across all agents and persist across sessions.",
       "Recent entries are automatically included in the system prompt for context.",
-      "When you discover ways to improve team alignment, code quality, or ways of working, capture them as a 'learning' — these shape how the team collaborates and raises the quality bar.",
+      "When you discover ways to improve team alignment, code quality, or ways of working, capture them as a 'learning'  -- these shape how the team collaborates and raises the quality bar.",
     ],
     parameters: Type.Object({
       action: StringEnum(["add", "list"] as const),
@@ -1210,9 +1210,9 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── Commands ─────────────────────────────────────────────────
+  // -- Commands -------------------------------------------------
 
-  // ─ /pmux — status ────────────────────────────────────────────
+  // - /pmux  -- status --------------------------------------------
 
   pi.registerCommand("pmux", {
     description: "Show pmux status ('/pmux all' for cross-session)",
@@ -1250,7 +1250,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ /pmux_join — join or create a project ─────────────────────
+  // - /pmux_join  -- join or create a project ---------------------
 
   pi.registerCommand("pmux_join", {
     description: "Join or create a project (interactive)",
@@ -1308,7 +1308,7 @@ export default function (pi: ExtensionAPI) {
       if (offlineAgents.length > 0) {
         const options = offlineAgents.map((a) => {
           const parts = [a.roleName, a.name].filter(Boolean).join(":");
-          return `${a.name} — ${parts}`;
+          return `${a.name}  -- ${parts}`;
         });
         const choice = await ctx.ui.select("Join as:", [...options, CREATE_AGENT]);
         if (!choice) { ctx.ui.notify("Cancelled.", "info"); return; }
@@ -1316,12 +1316,12 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (agentChoice === CREATE_AGENT) {
-        // ─ Create new agent ─────────────────────────────────
+        // - Create new agent ---------------------------------
         const name = await ctx.ui.input("Agent name:");
         if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
 
-        // Role (optional — may not have roles defined yet)
+        // Role (optional  -- may not have roles defined yet)
         const roles = await readRoles(mySession);
         const roleNames = Object.keys(roles);
         let roleName: string | undefined;
@@ -1363,8 +1363,8 @@ export default function (pi: ExtensionAPI) {
         );
 
       } else {
-        // ─ Resume existing agent ─────────────────────────────
-        const selectedName = agentChoice.split(" — ")[0]!;
+        // - Resume existing agent -----------------------------
+        const selectedName = agentChoice.split("  -- ")[0]!;
         const agent = offlineAgents.find((a) => a.name === selectedName);
         if (!agent) { ctx.ui.notify("Agent not found.", "error"); return; }
 
@@ -1389,7 +1389,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─ /pmux_leave — leave current project ───────────────────
+  // - /pmux_leave  -- leave current project -------------------
 
   pi.registerCommand("pmux_leave", {
     description: "Leave the current project and return to solo Pi",
@@ -1427,7 +1427,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── Helpers ──────────────────────────────────────────────────
+  // -- Helpers --------------------------------------------------
 
   /** Format a duration in milliseconds to a human-readable string. */
   function formatDuration(ms: number): string {
@@ -1443,7 +1443,7 @@ export default function (pi: ExtensionAPI) {
     return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
   }
 
-  // ── Artifacts ────────────────────────────────────────────────
+  // -- Artifacts ------------------------------------------------
 
   const PMUX_BASE = join(homedir(), ".pmux", "sessions");
 
@@ -1479,7 +1479,7 @@ export default function (pi: ExtensionAPI) {
     try {
       let content = readFileSync(path, "utf8").trim();
       if (content.length > MAX_CONTEXT_SIZE) {
-        content = content.slice(0, MAX_CONTEXT_SIZE) + `\n\n[truncated — see full file at ${path}]`;
+        content = content.slice(0, MAX_CONTEXT_SIZE) + `\n\n[truncated  -- see full file at ${path}]`;
       }
       return content || null;
     } catch {
@@ -1519,7 +1519,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (!found) {
-      ctx.ui.notify(`pmux: model "${modelStr}" not found — using default`, "warning");
+      ctx.ui.notify(`pmux: model "${modelStr}" not found  -- using default`, "warning");
     }
   }
 
@@ -1543,7 +1543,7 @@ export default function (pi: ExtensionAPI) {
         return theme.fg(color, `${icon} ${label}`);
       });
 
-      ctx.ui.setStatus("pmux", sessionLabel + parts.join(theme.fg("dim", " │ ")));
+      ctx.ui.setStatus("pmux", sessionLabel + parts.join(theme.fg("dim", " | ")));
     } catch {
       // Ignore widget errors
     }
