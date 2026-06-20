@@ -6,86 +6,46 @@
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                              pmux system                                     │
 │                                                                              │
-│  ┌─── session: "project-a" ──────────────────────────────────────────────┐   │
+│  ┌─── project: "myproject" ──────────────────────────────────────────────┐   │
 │  │  ┌──── pi agent ─────────┐     ┌──── pi agent ─────────┐            │   │
 │  │  │  name: frontend        │     │  name: backend         │            │   │
-│  │  │  role: frontend        │────▶│  role: backend          │            │   │
-│  │  │  addr: project-a/      │◀────│  addr: project-a/      │            │   │
-│  │  │       frontend         │     │       backend           │            │   │
+│  │  │  role: developer       │────▶│  role: developer        │            │   │
+│  │  │  team: Home            │◀────│  team: Home             │            │   │
 │  │  └────────────────────────┘     └────────────────────────┘            │   │
+│  │           │ file-based inbox            │                              │   │
+│  └───────────┼─────────────────────────────┼─────────────────────────────┘   │
+│              │                             │                                 │
+│  ┌───────────┴─────────────────────────────┴─────────────────────────────┐   │
+│  │                    ~/.pmux/sessions/myproject/                         │   │
+│  │  agents.json · roles.json · config.json · reservations.json           │   │
+│  │  backlog.json · journal.jsonl · messages.log                          │   │
+│  │  inbox/<uuid>/ · artifacts/                                           │   │
 │  └───────────────────────────────────────────────────────────────────────┘   │
-│         │                                    │                               │
-│         │           cross-session             │                               │
-│         ▼                                    ▼                               │
-│  ┌─── session: "infra" ─────────────────────────────────────────────────┐   │
-│  │  ┌──── pi agent ─────────┐                                           │   │
-│  │  │  name: devops          │                                           │   │
-│  │  │  role: devops          │                                           │   │
-│  │  │  addr: infra/devops    │                                           │   │
-│  │  └────────────────────────┘                                           │   │
-│  └───────────────────────────────────────────────────────────────────────┘   │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────────────┐     │
-│  │                    ~/.pmux/sessions/                                  │     │
-│  │  project-a/                                                          │     │
-│  │    agents.json        ← agent registry (keyed by UUID)               │     │
-│  │    roles.json         ← role definitions                             │     │
-│  │    config.json        ← session config (model, etc.)                 │     │
-│  │    reservations.json  ← file/directory reservations                  │     │
-│  │    backlog.json       ← task backlog (ordered array)                 │     │
-│  │    messages.log       ← message history (JSONL)                      │     │
-│  │    inbox/             ← per-agent message inboxes                    │     │
-│  │    artifacts/         ← shared documents                             │     │
-│  │  infra/                                                              │     │
-│  │    agents.json        ← agent registry                               │     │
-│  │    roles.json         ← role definitions                             │     │
-│  │    ...                                                               │     │
-│  └──────────────────────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Communication: File-Based Inboxes
-
-Agents communicate via crash-safe file-based inboxes — no tmux dependency.
+## Extension Modules
 
 ```
-Agent A calls pmux_send("backend", "add a /health endpoint")
-  → Resolves target agent from agents.json
-  → Writes message as .json file to target's inbox:
-      ~/.pmux/sessions/<session>/inbox/<targetId>/<timestamp>-<msgId>.json
-  → Target's inbox watcher detects new file
-  → Appends to messages.log (history)
-  → Renames .json → .delivered (prevents re-delivery)
-  → Delivers to target via pi.sendUserMessage()
-  → On agent_end: .delivered files are confirmed (deleted)
+extension/
+├── index.ts             # Entry point: lifecycle, 8 tools, 3 commands
+├── registry.ts          # Agent identity (UUID-keyed), roles, session config
+├── messaging.ts         # Crash-safe file-based inboxes (fs.watch)
+├── reservations.ts      # Path-prefix file/directory reservations
+├── backlog.ts           # Ordered task queue
+├── journal.ts           # Append-only decision/learning log
+└── package.json
 ```
 
-### Crash Safety
+## Commands (3)
 
-| State | Recovery |
-|-------|----------|
-| `.json` files in inbox | Never picked up → deliver on startup |
-| `.delivered` files in inbox | Queued but unconfirmed → redeliver on startup |
-| Messages in `messages.log` | Durable history for audit |
+| Command | Purpose |
+|---------|---------|
+| `/pmux` | Show agent status |
+| `/pmux_join [project]` | Join or create a project (select/create agent) |
+| `/pmux_leave` | Leave project, return to solo Pi |
 
-## Session Files
-
-Each session stores its state under `~/.pmux/sessions/<session>/`:
-
-| File / Directory | Format | Purpose |
-|------------------|--------|---------|
-| `agents.json` | `Record<UUID, AgentInfo>` | Agent registry (keyed by UUID) |
-| `roles.json` | `Record<name, RoleDefinition>` | Role definitions with instructions |
-| `config.json` | `SessionConfig` | Default model and session metadata |
-| `reservations.json` | `Record<path, Reservation>` | File/directory reservations |
-| `backlog.json` | `Task[]` | Task backlog (array order = priority) |
-| `messages.log` | JSONL | Message history (append-only) |
-| `inbox/<agentId>/` | `.json` / `.delivered` files | Per-agent message inbox |
-| `artifacts/project/` | user files | Shared project documents |
-| `artifacts/teams/<team>/` | user files | Team-level shared documents |
-| `artifacts/agents/<agentId>/` | user files | Private agent documents |
-
-## Agent Tools (7 total)
+## Tools (8)
 
 | Tool | Actions | Purpose |
 |------|---------|---------|
@@ -96,91 +56,117 @@ Each session stores its state under `~/.pmux/sessions/<session>/`:
 | `pmux_artifacts` | — | List shared documents |
 | `pmux_reserve` | claim, release, list | File/directory reservations |
 | `pmux_task` | add, list, assign, pick, done, drop, block | Task backlog management |
+| `pmux_journal` | add, list | Record decisions and learnings |
 
-## Extension Modules
+## Session Files
+
+| File / Directory | Format | Purpose |
+|------------------|--------|---------|
+| `agents.json` | `Record<UUID, AgentInfo>` | Agent registry |
+| `roles.json` | `Record<name, RoleDefinition>` | Role definitions |
+| `config.json` | `SessionConfig` | Session metadata |
+| `reservations.json` | `Record<path, Reservation>` | File reservations |
+| `backlog.json` | `Task[]` | Task backlog (array order = priority) |
+| `journal.jsonl` | JSONL | Decisions & learnings (append-only) |
+| `messages.log` | JSONL | Message history (append-only) |
+| `inbox/<uuid>/` | `.json` / `.delivered` | Per-agent message inbox |
+| `artifacts/project/` | user files | Project-wide shared docs |
+| `artifacts/teams/<team>/` | user files | Team shared docs |
+| `artifacts/agents/<uuid>/` | user files | Private agent docs |
+
+## Agent Lifecycle
 
 ```
-extension/
-├── index.ts             # Entry point: lifecycle, tools, commands, event handlers
-├── registry.ts          # Agent registry, roles, session config (atomic JSON I/O)
-├── messaging.ts         # File-based inbox system (crash-safe delivery)
-├── reservations.ts      # File/directory reservation system
-├── backlog.ts           # Task backlog management
-├── tmux.ts              # tmux detection (optional — visual enhancements only)
-└── package.json
+pi starts
+  └─► session_start (silent — no notifications, no auto-registration)
+        └─► Reload recovery only: check pi session entries for stored UUID
+
+/pmux_join
+  ├─► Select or create project
+  ├─► Select existing agent or create new (name, team, role)
+  ├─► Go online, start heartbeat (30s)
+  ├─► Watch inbox for messages (fs.watch)
+  ├─► Deliver pending + crash-recovery messages
+  └─► Inject role/context into system prompt
+
+pi running
+  ├─► before_agent_start → inject role, context, agents, journal
+  ├─► agent_end → heartbeat, confirm messages, clean stale reservations
+  └─► tools available: 8 tools for coordination
+
+/pmux_leave
+  ├─► Go offline in registry
+  ├─► Stop heartbeat, close inbox watcher
+  ├─► Clear all state
+  └─► Return to solo Pi (silent)
+
+pi exits
+  └─► session_shutdown
+        └─► Go offline (unless reloading — keep online for recovery)
 ```
 
-## Data Flow
+## Data Flows
 
-### Messaging (File-Based Inboxes)
+### Messaging
 
 ```
 pmux_send("backend", "message")
-  → resolveAgent("backend", mySession)
-    → Read agents.json → find agent by name → get UUID + session
-  → Create InboxMessage { id, from, fromName, fromRole, fromSession, timestamp, message }
-  → Atomic write to inbox: .tmp → rename to .json
+  → resolveAgent("backend") → find UUID from agents.json
+  → Write .tmp → rename to .json (atomic) in target's inbox/
   → Target's FSWatcher fires
-    → Read .json → append to messages.log → rename to .delivered
-    → pi.sendUserMessage() delivers to agent's conversation
-  → On agent_end: delete .delivered files (confirmed)
+    → Append to messages.log
+    → Rename .json → .delivered
+    → pi.sendUserMessage({ deliverAs: "followUp" })
+  → On agent_end: delete .delivered (confirmed)
 ```
 
 ### File Reservations
 
 ```
-pmux_reserve({ action: "claim", paths: ["src/auth/"], reason: "refactoring" })
-  → Normalize paths (preserve trailing slash convention)
-  → Read reservations.json
+pmux_reserve({ action: "claim", paths: ["src/auth/"] })
   → Check overlap: pathA.startsWith(pathB) || pathB.startsWith(pathA)
-  → Same agent = no conflict; stale reservation (offline agent) = claimable
-  → Write reservation with { agent, agentId, since, reason }
-  → On write/edit tool_result: check conflict, prepend ⚠️ warning if reserved
+  → Stale (offline agent) = claimable
+  → On write/edit: tool_result prepends ⚠️ warning if reserved
 
-Stale cleanup:
-  → On agent_end: get online agent IDs, remove reservations held by offline agents
+Cleanup: agent_end removes reservations held by offline agents
 ```
 
 ### Task Backlog
 
 ```
-pmux_task({ action: "add", title: "...", files: [...] })
-  → Generate next ID: TASK-01, TASK-02, etc.
-  → Append to backlog.json (or prepend if urgent)
+add → append to backlog.json (prepend if urgent)
+assign → status: "assigned" + inbox notification with pick command
+pick → status: "in-progress" + auto-reserve task files (partial success)
+done → status: "done" + auto-release reservations + capture summary
+drop → status: "todo" + auto-release reservations
 
-pmux_task({ action: "assign", id: "TASK-03", to: "backend" })
-  → Set status: "assigned", set assignee
-  → Send notification to assignee via inbox (with pick command)
-
-pmux_task({ action: "pick", id: "TASK-03" })
-  → If assigned to me: accept (status → "in-progress")
-  → If no ID: grab first "todo" task
-  → Auto-reserve task.files (per-file, partial success)
-  → Reserve reason: "TASK-03: <title>"
-
-pmux_task({ action: "done", id: "TASK-03", summary: "..." })
-  → Set status: "done", capture summary + completedAt
-  → Auto-release file reservations
-
-Task lifecycle:
+Lifecycle:
   Self-service:  todo → pick → in-progress → done/drop
   Delegated:     todo → assign → assigned → pick(by assignee) → in-progress → done/drop
-  Blocked:       any → block → blocked → pick → in-progress
+```
+
+### Journal
+
+```
+pmux_journal({ action: "add", type: "decision", content: "..." })
+  → Append to journal.jsonl (sync, append-only)
+  → Last 10 entries auto-injected into system prompt (sliding window)
+  → All agents see shared decisions, learnings, progress
 ```
 
 ### System Prompt Injection
 
-On `before_agent_start`, the extension injects:
-- Role instructions (from roles.json)
-- Project/team context (from CONTEXT.md artifacts)
-- Available roles summary
-- Online agent roster with addressing instructions
-- Communication guidelines
-- Artifact paths
+On each turn (`before_agent_start`), the extension injects:
+1. Role instructions (from `roles.json`)
+2. Project context (from `artifacts/project/CONTEXT.md`)
+3. Team context (from `artifacts/teams/<team>/CONTEXT.md`)
+4. Recent journal entries (last 10, sliding window)
+5. Available roles summary
+6. Online agent roster
+7. Addressing and communication guidelines
+8. Artifact paths
 
 ## Agent Identity
-
-Agents are identified by UUID (stable across restarts), not by name.
 
 ```jsonc
 // agents.json (keyed by UUID)
@@ -193,54 +179,23 @@ Agents are identified by UUID (stable across restarts), not by name.
     "role": "developer",
     "roleName": "developer",
     "cwd": "/home/user/project",
-    "pane": "myproject:0.0",    // only if tmux
     "pid": 12345,
-    "status": "online",         // online | offline
+    "status": "online",
     "registeredAt": "2026-06-19T10:00:00Z",
     "lastHeartbeat": "2026-06-19T10:05:32Z"
   }
 }
 ```
 
-## Agent Lifecycle
-
-```
-pi starts
-  └─► session_start
-        ├─► Detect session (env var or tmux or "default")
-        ├─► Auto-register from PMUX_AGENT env (or wait for /pmux_register)
-        ├─► Go online, start heartbeat (30s interval)
-        ├─► Watch inbox for new messages
-        ├─► Deliver pending + crash-recovery messages
-        └─► Set tmux titles (optional)
-
-pi running
-  ├─► agent_start → update heartbeat
-  ├─► agent_end   → update heartbeat, confirm delivered messages,
-  │                  clean stale reservations
-  └─► tools: pmux_role, pmux_list, pmux_send, pmux_broadcast,
-             pmux_artifacts, pmux_reserve, pmux_task
-
-pi exits
-  └─► session_shutdown
-        ├─► Stop heartbeat, close inbox watcher
-        └─► Go offline (unless reloading — keep online for recovery)
-```
-
 ## Agent Addressing
 
 | Format | Scope | Example |
 |--------|-------|---------|
-| `name` | Same session | `"backend"` |
-| `session/name` | Cross-session | `"infra/devops"` |
+| `name` | Same project | `"backend"` |
+| `project/name` | Cross-project | `"infra/devops"` |
 
 ## Message Format
 
 ```
-[pmux:<sender-session>/<sender-name> (<role>)] <message>
-```
-
-Example:
-```
-[pmux:project-a/frontend (developer)] Can you create a /health endpoint?
+[pmux:<project>/<name> (<role>)] <message>
 ```

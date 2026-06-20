@@ -6,7 +6,7 @@
 
 No servers, no WebSockets, no daemons — just file-based inboxes, shared JSON state, and a Pi extension.
 
-tmux integration is optional, providing visual enhancements (pane titles, window names) but not required for communication.
+pmux is a pure Pi extension with no external dependencies.
 
 ---
 
@@ -62,7 +62,6 @@ Agents are identified by UUID (stable across restarts). Names are for human-frie
     "role": "developer",
     "roleName": "developer",
     "cwd": "/home/user/project/frontend",
-    "pane": "myproject:0.0",         // only if tmux
     "pid": 12345,
     "status": "online",              // online | offline
     "registeredAt": "2026-06-19T10:00:00Z",
@@ -171,7 +170,6 @@ The core extension handles:
 - 7 tool registrations (role, list, send, broadcast, artifacts, reserve, task)
 - System prompt injection (roles, context, agent roster)
 - Event handlers (`tool_result` for reservation warnings, `agent_end` for cleanup)
-- tmux visual enhancements (optional)
 
 ---
 
@@ -230,14 +228,13 @@ List documents at project, team, and agent levels.
 ```
 pi starts
   └─► session_start
-        ├─► Detect session (PMUX_SESSION env, tmux, or "default")
+        ├─► Reload recovery: check pi session entries for stored UUID
         ├─► Auto-register from PMUX_AGENT env, or recover from pi session entries
-        │   (or wait for /pmux_register or /pmux_login)
+        │   (or wait for /pmux_join)
         ├─► Go online, start heartbeat (30s interval)
         ├─► Ensure inbox directory, artifact directories
         ├─► Start inbox FSWatcher — deliver messages via pi.sendUserMessage
         ├─► Deliver pending + crash-recovery messages
-        └─► Set tmux titles and status widget (optional)
 
 pi running
   ├─► before_agent_start → inject system prompt (roles, context, agents)
@@ -284,10 +281,6 @@ Every agent has a fully qualified address: `session/name`.
 pmux/                              # Project root
 ├── package.json                   # type: module, pi extension config
 ├── README.md
-├── bin/
-│   └── pmux                       # Bash shim → lib/cli.ts
-├── lib/
-│   └── cli.ts                     # CLI (TypeScript, Node 24+)
 ├── extension/                     # Pi extension
 │   ├── package.json
 │   ├── index.ts                   # Lifecycle, tools, commands, events
@@ -295,7 +288,6 @@ pmux/                              # Project root
 │   ├── messaging.ts               # File-based inbox messaging
 │   ├── reservations.ts            # File/directory reservations
 │   ├── backlog.ts                 # Task backlog management
-│   └── tmux.ts                    # tmux detection (optional)
 ├── examples/
 │   └── pmux.json                  # Example config
 └── docs/
