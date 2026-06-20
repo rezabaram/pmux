@@ -335,7 +335,6 @@ export default function (pi: ExtensionAPI) {
       extra += `\n\n## Project Context\n${projectCtx}`;
     }
 
-
     // Inject recent journal entries (sliding window)
     const recentJournal = getRecentEntries(mySession);
     if (recentJournal.length > 0) {
@@ -348,7 +347,7 @@ export default function (pi: ExtensionAPI) {
     const roleEntries = Object.values(roles);
     if (roleEntries.length > 0) {
       const roleList = roleEntries
-        .map((r) => `- ${r.name}: ${r.instructions.split("\n")[0]?.slice(0, 120) ?? ""}`)
+        .map((r) => `- ${r.name}: ${r.description || r.instructions.split("\n")[0]?.slice(0, 120) || ""}`)
         .join("\n");
       extra += `\n\n## Available Roles\n${roleList}`;
     }
