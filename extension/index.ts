@@ -342,16 +342,6 @@ export default function (pi: ExtensionAPI) {
       extra += `\n\n## Recent Journal\n${journalLines.join("\n")}`;
     }
 
-    // Inject available roles summary
-    const roles = await readRoles(mySession);
-    const roleEntries = Object.values(roles);
-    if (roleEntries.length > 0) {
-      const roleList = roleEntries
-        .map((r) => `- ${r.name}: ${r.description || r.instructions.split("\n")[0]?.slice(0, 120) || ""}`)
-        .join("\n");
-      extra += `\n\n## Available Roles\n${roleList}`;
-    }
-
     // Gather online agents
     const onlineAgents = await getOnlineAgents(mySession);
     const sameSessionOthers = onlineAgents.filter((a) => a.id !== myId);
