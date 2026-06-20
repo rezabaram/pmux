@@ -1430,6 +1430,29 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+
+  /** Resolve which project to manage. Uses current if joined, otherwise asks. */
+  async function resolveProjectForManage(ctx: ExtensionContext): Promise<string | null> {
+    if (mySession) return mySession;
+
+    const sessionsDir = join(homedir(), ".pmux", "sessions");
+    let projects: string[] = [];
+    try {
+      projects = readdirSync(sessionsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {}
+
+    if (projects.length === 0) {
+      ctx.ui.notify("No projects yet. Create one with /pmux manage > Projects.", "info");
+      return null;
+    }
+
+    if (projects.length === 1) return projects[0]!;
+
+    return (await ctx.ui.select("Which project?", projects)) ?? null;
+  }
+
   async function manageProjects(ctx: ExtensionContext): Promise<void> {
     const sessionsDir = join(homedir(), ".pmux", "sessions");
     let projects: string[] = [];
@@ -1545,12 +1568,10 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function manageAgents(ctx: ExtensionContext): Promise<void> {
-    if (!mySession) {
-      ctx.ui.notify("Join a project first with /pmux join.", "info");
-      return;
-    }
+    const session = await resolveProjectForManage(ctx);
+    if (!session) return;
 
-    const registry = await readRegistry(mySession);
+    const registry = await readRegistry(session);
     const allAgents = Object.values(registry);
     const offlineAgents = allAgents.filter((a) => a.status === "offline");
 
@@ -1572,7 +1593,7 @@ export default function (pi: ExtensionAPI) {
       if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
       // Role
-      const projectRoles = await readRoles(mySession);
+      const projectRoles = await readRoles(session);
       const allRoles: RoleDefinition[] = [
         ...Object.values(projectRoles),
         ...BUILTIN_ROLES.filter((r) => !projectRoles[r.name]),
@@ -1597,7 +1618,7 @@ export default function (pi: ExtensionAPI) {
       // Workspace
       let wsChoice: string | undefined;
       let wsPath: string | undefined;
-      const config = await readSessionConfig(mySession);
+      const config = await readSessionConfig(session);
       if (config.mainRepo) {
         const currentDirUsed = allAgents.some((a) => a.workspace === ctx.cwd);
         const wsOptions: string[] = ["New worktree"];
@@ -1626,7 +1647,7 @@ export default function (pi: ExtensionAPI) {
 
       // 1. Copy built-in role if needed
       if (roleToAdd) {
-        await addRole(mySession, roleToAdd);
+        await addRole(session, roleToAdd);
       }
 
       // 2. Create worktree if requested
@@ -1658,7 +1679,7 @@ export default function (pi: ExtensionAPI) {
       const agent: AgentInfo = {
         id: newAgentId(),
         name,
-        session: mySession,
+        session: session,
         role: roleName ?? `Agent ${name}`,
         roleName,
         workspace,
@@ -1668,7 +1689,7 @@ export default function (pi: ExtensionAPI) {
         registeredAt: new Date().toISOString(),
         lastHeartbeat: new Date().toISOString(),
       };
-      await registerAgent(mySession, agent);
+      await registerAgent(session, agent);
 
       let msg = `Agent "${name}" created (offline).`;
       if (roleName) msg += `\nRole: ${roleName}`;
@@ -1689,23 +1710,21 @@ export default function (pi: ExtensionAPI) {
     if (action === "Delete") {
       const confirm = await ctx.ui.confirm("Delete agent?", `Permanently delete "${agent.name}"?`);
       if (!confirm) { ctx.ui.notify("Cancelled.", "info"); return; }
-      await removeAgent(mySession, agent.id);
+      await removeAgent(session, agent.id);
       ctx.ui.notify(`Deleted agent "${agent.name}".`, "info");
     } else if (action === "Rename") {
       const newName = await ctx.ui.input("New name:", agent.name);
       if (!newName || newName === agent.name) { ctx.ui.notify("Cancelled.", "info"); return; }
-      await updateAgent(mySession, agent.id, { name: newName });
+      await updateAgent(session, agent.id, { name: newName });
       ctx.ui.notify(`Renamed "${agent.name}" to "${newName}".`, "info");
     }
   }
 
   async function manageRoles(ctx: ExtensionContext): Promise<void> {
-    if (!mySession) {
-      ctx.ui.notify("Join a project first with /pmux join.", "info");
-      return;
-    }
+    const session = await resolveProjectForManage(ctx);
+    if (!session) return;
 
-    const roles = await readRoles(mySession);
+    const roles = await readRoles(session);
     const roleNames = Object.keys(roles);
 
     const ADD_NEW = "+ New role";
@@ -1728,7 +1747,7 @@ export default function (pi: ExtensionAPI) {
       const instructions = await ctx.ui.input("Full instructions:");
       if (!instructions) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-      await addRole(mySession, { name, description: desc, instructions });
+      await addRole(session, { name, description: desc, instructions });
       ctx.ui.notify(`Role "${name}" added.`, "info");
 
     } else {
@@ -1741,7 +1760,7 @@ export default function (pi: ExtensionAPI) {
         const confirm = await ctx.ui.confirm("Delete role?", `Permanently delete role "${selectedName}"?`);
         if (!confirm) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-        await removeRole(mySession, selectedName);
+        await removeRole(session, selectedName);
         ctx.ui.notify(`Role "${selectedName}" deleted.`, "info");
       }
     }
