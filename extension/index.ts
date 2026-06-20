@@ -841,7 +841,6 @@ export default function (pi: ExtensionAPI) {
           if (params.status) {
             filtered = filtered.filter((t) => t.status === params.status);
           }
-          }
 
           if (filtered.length === 0) {
             const filterNote = params.status ? ` with status "${params.status}"` : "";
