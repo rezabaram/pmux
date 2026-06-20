@@ -46,6 +46,7 @@ All communication is file-based (`~/.pmux/sessions/<session>/inbox/`). Messages 
 | `/pmux join` | Join or create a project |
 | `/pmux leave` | Leave project, return to solo Pi |
 | `/pmux manage` | Manage projects and agents (rename, delete) |
+| `/pmux workspace` | Git worktree setup and sync (setup, create, sync, status) |
 
 ## Built-in Roles
 
@@ -61,6 +62,30 @@ pmux ships with 5 role templates, ready to use during `/pmux join`:
 
 Built-in roles are copied to the project on first use and can be customized.
 You can also create custom roles during agent creation or with `pmux_role`.
+
+## Workspaces
+
+Agents can work in isolated git worktrees — each agent gets their own copy of the codebase on a separate branch.
+
+```bash
+# Architect sets up the main repo
+/pmux workspace > setup           # registers cwd as main repo + architect's workspace
+
+# Architect creates worktrees for agents
+/pmux workspace > create          # select agent -> creates ~/myapp-AgentName
+
+# Agent starts Pi in their worktree
+cd ~/myapp-Negin && pi
+/pmux join                        # auto-detects workspace
+
+# Agent syncs from main when needed
+/pmux workspace > sync            # fetch + rebase from main
+
+# Agent checks their branch status
+/pmux workspace > status          # ahead/behind, dirty files
+```
+
+Worktrees are optional — agents working on docs, planning, or ops don't need one.
 
 ## Tools (8)
 
@@ -112,6 +137,7 @@ You can also create custom roles during agent creation or with `pmux_role`.
 - **Shared journal** — decisions and learnings in every agent's prompt
 - **Two-tier artifacts — project and private document sharing
 - **CONTEXT.md injection** — project context auto-loaded into prompts
+- **Git workspaces** — isolated worktrees per agent, architect reviews and merges
 - **Zero dependencies** — just Node.js and Pi
 
 ## Extension Structure

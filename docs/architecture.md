@@ -46,6 +46,7 @@ Single `/pmux` command with subcommands:
 | `/pmux join` | Join or create a project (select/create agent) |
 | `/pmux leave` | Leave project, return to solo Pi |
 | `/pmux manage` | Manage projects and agents (rename, delete) |
+| `/pmux workspace` | Git worktree setup and sync |
 
 ## Built-in Roles
 
@@ -159,6 +160,28 @@ pmux_journal({ action: "add", type: "decision", content: "..." })
   → Last 10 entries auto-injected into system prompt (sliding window)
   → All agents see shared decisions, learnings, progress
 ```
+
+
+### Git Workspaces
+
+```
+Architect:  /pmux workspace > setup     <- sets mainRepo + own workspace
+            /pmux workspace > create    <- creates worktree for an agent
+
+Agent:      cd ~/myapp-Negin && pi
+            /pmux join                  <- workspace auto-detected from agent record
+            ... work on branch agent/Negin ...
+            pmux_task done TASK-03      <- signals review-ready
+
+Architect:  git diff main..agent/Negin  <- reviews
+            git merge agent/Negin       <- merges to main
+
+All agents: /pmux workspace > sync      <- rebase from main
+```
+
+Data stored:
+- `config.json`: `mainRepo` path (project-level)
+- `agents.json`: `workspace` path per agent
 
 ### System Prompt Injection
 
