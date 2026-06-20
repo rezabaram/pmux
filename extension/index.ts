@@ -1400,8 +1400,6 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
-    },
-  });
 
   // - /pmux_leave  -- leave current project -------------------
 

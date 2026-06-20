@@ -1,9 +1,12 @@
 {
   "name": "pmux",
   "version": "0.2.0",
-  "description": "Pi multi-agent coordination — terminal agnostic",
+  "description": "Pi multi-agent coordination",
   "type": "module",
   "keywords": ["pi-package"],
+  "scripts": {
+    "test": "node test/parse.mjs"
+  },
   "pi": {
     "extensions": ["./extension/index.ts"]
   },
