@@ -1280,14 +1280,10 @@ export default function (pi: ExtensionAPI) {
         if (!project) { ctx.ui.notify("Cancelled.", "info"); return; }
       }
 
-      // If already in this project with an identity, just notify
-      if (mySession === project && myId) {
-        ctx.ui.notify(`Already in project "${project}" as ${myName}.`, "info");
-        return;
-      }
 
-      // If switching from another project, go offline there first
-      if (myId && mySession && mySession !== project) {
+      // If switching agents (same or different project), go offline first
+      const previousAgentId = myId;
+      if (myId && mySession) {
         await goOffline(mySession, myId);
         stopAgent();
       }
@@ -1304,7 +1300,7 @@ export default function (pi: ExtensionAPI) {
       // 2. Select existing agent or create new
       const registry = await readRegistry(mySession);
       const allAgents = Object.values(registry);
-      const offlineAgents = allAgents.filter((a) => a.status === "offline");
+      const offlineAgents = allAgents.filter((a) => a.status === "offline" && a.id !== previousAgentId);
 
       const CREATE_AGENT = "+ Create new agent";
       let agentChoice = CREATE_AGENT;
