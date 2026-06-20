@@ -1627,7 +1627,7 @@ export default function (pi: ExtensionAPI) {
 
     switch (action) {
       case "setup": {
-        if (!mySession) { ctx.ui.notify("Join a project first with /pmux join.", "warning"); return; }
+        if (!mySession || !myId) { ctx.ui.notify("Join a project first with /pmux join.", "warning"); return; }
 
         // Check if cwd is a git repo
         const gitCheck = await pi.exec("git", ["rev-parse", "--show-toplevel"], { timeout: 5000 });
@@ -1637,41 +1637,64 @@ export default function (pi: ExtensionAPI) {
         }
 
         const repoPath = gitCheck.stdout.trim();
+
+        // Set main repo in project config
         const config = await readSessionConfig(mySession);
         config.mainRepo = repoPath;
         await writeSessionConfig(mySession, config);
 
-        // Get current branch
+        // Set current agent's workspace to cwd
+        await updateAgent(mySession, myId, { workspace: ctx.cwd });
+
         const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 5000 });
         const branch = branchResult.stdout.trim() || "main";
 
-        ctx.ui.notify(`Main repo set to: ${repoPath}\nBranch: ${branch}`, "info");
+        ctx.ui.notify(`Main repo set to: ${repoPath}\nYour workspace: ${ctx.cwd}\nBranch: ${branch}`, "info");
         break;
       }
 
       case "create": {
-        if (!mySession || !myId || !myName) {
+        if (!mySession || !myId) {
           ctx.ui.notify("Join a project first with /pmux join.", "warning");
           return;
         }
 
         const config = await readSessionConfig(mySession);
         if (!config.mainRepo) {
-          ctx.ui.notify("No main repo configured. The architect should run /pmux workspace > setup first.", "warning");
+          ctx.ui.notify("No main repo configured. Run /pmux workspace > setup first.", "warning");
           return;
         }
 
+        // Select which agent to create workspace for
+        const registry = await readRegistry(mySession);
+        const agents = Object.values(registry).filter((a) => !a.workspace && a.id !== myId);
+
+        if (agents.length === 0) {
+          ctx.ui.notify("All agents already have workspaces (or no other agents in project).", "info");
+          return;
+        }
+
+        const agentOptions = agents.map((a) => {
+          const roleLabel = a.roleName ? ` (${a.roleName})` : "";
+          return `${a.name}${roleLabel}`;
+        });
+        const agentChoice = await ctx.ui.select("Create workspace for:", agentOptions);
+        if (!agentChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+        const targetName = agentChoice.split(" (")[0]!;
+        const targetAgent = agents.find((a) => a.name === targetName);
+        if (!targetAgent) { ctx.ui.notify("Agent not found.", "error"); return; }
+
         // Default worktree path: sibling of main repo
-        const { basename, dirname } = await import("node:path");
-        const repoName = basename(config.mainRepo);
-        const parentDir = dirname(config.mainRepo);
-        const defaultPath = `${parentDir}/${repoName}-${myName}`;
+        const { basename: bn, dirname: dn } = await import("node:path");
+        const repoName = bn(config.mainRepo);
+        const parentDir = dn(config.mainRepo);
+        const defaultPath = `${parentDir}/${repoName}-${targetName}`;
 
         const worktreePath = await ctx.ui.input("Worktree path:", defaultPath);
         if (!worktreePath) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-        // Create branch name
-        const branchName = `agent/${myName}`;
+        const branchName = `agent/${targetName}`;
 
         // Create worktree
         const result = await pi.exec(
@@ -1681,7 +1704,6 @@ export default function (pi: ExtensionAPI) {
         );
 
         if (result.code !== 0) {
-          // Branch might already exist, try without -b
           const retry = await pi.exec(
             "git",
             ["-C", config.mainRepo, "worktree", "add", worktreePath, branchName],
@@ -1693,11 +1715,11 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        // Store workspace path in agent record
-        await updateAgent(mySession, myId, { workspace: worktreePath });
+        // Store workspace path in target agent's record
+        await updateAgent(mySession, targetAgent.id, { workspace: worktreePath });
 
         ctx.ui.notify(
-          `Worktree created:\n  Path: ${worktreePath}\n  Branch: ${branchName}\n\nRestart Pi in that directory, or use absolute paths.`,
+          `Workspace created for ${targetName}:\n  Path: ${worktreePath}\n  Branch: ${branchName}\n\n${targetName} can start Pi there and /pmux join.`,
           "info"
         );
         break;
