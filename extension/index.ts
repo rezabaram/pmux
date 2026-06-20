@@ -1446,30 +1446,34 @@ export default function (pi: ExtensionAPI) {
     if (!choice) return;
 
     if (choice === NEW_PROJECT) {
+      // ---- COLLECT ALL INPUTS ----
       const name = await ctx.ui.input("Project name:");
       if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-      const { mkdirSync: mkDir } = await import("node:fs");
-      mkDir(join(sessionsDir, name), { recursive: true });
-
-      const newConfig: SessionConfig = { createdAt: new Date().toISOString() };
-
-      // Offer to set main repo
       const setRepo = await ctx.ui.confirm("Main repo?", "Set current directory as the main repo for this project?");
+
+      let needsGitInit = false;
       if (setRepo) {
         const gitCheck = await pi.exec("git", ["rev-parse", "--show-toplevel"], { timeout: 5000 });
         if (gitCheck.code !== 0) {
-          const initGit = await ctx.ui.confirm("Not a git repo", "Current directory is not a git repo. Initialize one?");
-          if (initGit) {
-            await pi.exec("git", ["init"], { timeout: 5000 });
-          }
+          needsGitInit = await ctx.ui.confirm("Not a git repo", "Current directory is not a git repo. Initialize one?");
         }
-        newConfig.mainRepo = ctx.cwd;
       }
 
+      // ---- EXECUTE ALL ACTIONS ----
+      const { mkdirSync: mkDir } = await import("node:fs");
+      mkDir(join(sessionsDir, name), { recursive: true });
+
+      if (needsGitInit) {
+        await pi.exec("git", ["init"], { timeout: 5000 });
+      }
+
+      const newConfig: SessionConfig = { createdAt: new Date().toISOString() };
+      if (setRepo) {
+        newConfig.mainRepo = ctx.cwd;
+      }
       await writeSessionConfig(name, newConfig);
 
-      // If current agent is joined, set their workspace too
       if (setRepo && myId && mySession === name) {
         await updateAgent(mySession, myId, { workspace: ctx.cwd });
       }
@@ -1562,10 +1566,12 @@ export default function (pi: ExtensionAPI) {
     if (!selected) return;
 
     if (selected === NEW_AGENT) {
+      // ---- COLLECT ALL INPUTS FIRST ----
+
       const name = await ctx.ui.input("Agent name:");
       if (!name) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-      // Role selection (built-in + project)
+      // Role
       const projectRoles = await readRoles(mySession);
       const allRoles: RoleDefinition[] = [
         ...Object.values(projectRoles),
@@ -1573,26 +1579,26 @@ export default function (pi: ExtensionAPI) {
       ];
 
       let roleName: string | undefined;
+      let roleToAdd: RoleDefinition | undefined;
       if (allRoles.length > 0) {
         const roleOptions = allRoles.map((r) => {
           const desc = r.description || r.instructions.slice(0, 60);
           return `${r.name} -- ${desc}`;
         });
         const roleChoice = await ctx.ui.select("Role:", roleOptions);
-        if (roleChoice) {
-          roleName = roleChoice.split(" -- ")[0]!;
-          if (!projectRoles[roleName]) {
-            const role = allRoles.find((r) => r.name === roleName);
-            if (role) await addRole(mySession, role);
-          }
+        if (!roleChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
+        roleName = roleChoice.split(" -- ")[0]!;
+        // Check if built-in needs copying
+        if (!projectRoles[roleName]) {
+          roleToAdd = allRoles.find((r) => r.name === roleName);
         }
       }
 
-      // Optional workspace
-      let workspace: string | undefined;
+      // Workspace
+      let wsChoice: string | undefined;
+      let wsPath: string | undefined;
       const config = await readSessionConfig(mySession);
       if (config.mainRepo) {
-        // Check if current directory is already used by another agent
         const currentDirUsed = allAgents.some((a) => a.workspace === ctx.cwd);
         const wsOptions: string[] = ["New worktree"];
         if (!currentDirUsed) {
@@ -1600,42 +1606,55 @@ export default function (pi: ExtensionAPI) {
         }
         wsOptions.push("No workspace");
 
-        const wsChoice = await ctx.ui.select("Workspace:", wsOptions);
+        wsChoice = await ctx.ui.select("Workspace:", wsOptions);
+        if (!wsChoice) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-        if (wsChoice === "Use current directory") {
-          workspace = ctx.cwd;
-
-        } else if (wsChoice === "New worktree") {
+        if (wsChoice === "New worktree") {
           const { basename: bn, dirname: dn } = await import("node:path");
           const repoName = bn(config.mainRepo);
           const parentDir = dn(config.mainRepo);
           const defaultPath = `${parentDir}/${repoName}-${name}`;
 
-          const wsPath = await ctx.ui.input("Worktree path:", defaultPath);
-          if (wsPath) {
-            const branchName = `agent/${name}`;
-            const result = await pi.exec(
-              "git", ["-C", config.mainRepo, "worktree", "add", wsPath, "-b", branchName],
-              { timeout: 30000 }
-            );
-            if (result.code !== 0) {
-              const retry = await pi.exec(
-                "git", ["-C", config.mainRepo, "worktree", "add", wsPath, branchName],
-                { timeout: 30000 }
-              );
-              if (retry.code !== 0) {
-                ctx.ui.notify(`Workspace failed: ${retry.stderr}`, "warning");
-              } else {
-                workspace = wsPath;
-              }
-            } else {
-              workspace = wsPath;
-            }
-          }
+          wsPath = await ctx.ui.input(`Worktree path (${defaultPath}):`, defaultPath);
+          if (!wsPath) { ctx.ui.notify("Cancelled.", "info"); return; }
+        } else if (wsChoice === "Use current directory") {
+          wsPath = ctx.cwd;
         }
-        // "No workspace" → workspace stays undefined
       }
 
+      // ---- EXECUTE ALL ACTIONS ----
+
+      // 1. Copy built-in role if needed
+      if (roleToAdd) {
+        await addRole(mySession, roleToAdd);
+      }
+
+      // 2. Create worktree if requested
+      let workspace: string | undefined;
+      if (wsChoice === "New worktree" && wsPath && config.mainRepo) {
+        const branchName = `agent/${name}`;
+        const result = await pi.exec(
+          "git", ["-C", config.mainRepo, "worktree", "add", wsPath, "-b", branchName],
+          { timeout: 30000 }
+        );
+        if (result.code !== 0) {
+          const retry = await pi.exec(
+            "git", ["-C", config.mainRepo, "worktree", "add", wsPath, branchName],
+            { timeout: 30000 }
+          );
+          if (retry.code !== 0) {
+            ctx.ui.notify(`Workspace creation failed: ${retry.stderr}\nAgent created without workspace.`, "warning");
+          } else {
+            workspace = wsPath;
+          }
+        } else {
+          workspace = wsPath;
+        }
+      } else if (wsChoice === "Use current directory") {
+        workspace = wsPath;
+      }
+
+      // 3. Create agent
       const agent: AgentInfo = {
         id: newAgentId(),
         name,
@@ -1652,8 +1671,9 @@ export default function (pi: ExtensionAPI) {
       await registerAgent(mySession, agent);
 
       let msg = `Agent "${name}" created (offline).`;
+      if (roleName) msg += `\nRole: ${roleName}`;
       if (workspace) msg += `\nWorkspace: ${workspace}`;
-      msg += `\nThey can start Pi${workspace ? " in " + workspace : ""} and /pmux join.`;
+      msg += `\nStart Pi${workspace ? " in " + workspace : ""} and /pmux join.`;
       ctx.ui.notify(msg, "info");
       return;
     }
