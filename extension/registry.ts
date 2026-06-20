@@ -23,6 +23,7 @@ export interface AgentInfo {
   session: string; // pmux session name
   role: string; // human-readable role description
   roleName?: string; // references a RoleDefinition name
+  workspace?: string; // git worktree path
   cwd: string;
   pane?: string; // tmux pane target (optional — only if tmux)
   pid: number;
@@ -43,6 +44,7 @@ export type RolesMap = Record<string, RoleDefinition>;
 
 export interface SessionConfig {
   model?: string;
+  mainRepo?: string; // path to the main git repo
   createdAt?: string;
 }
 

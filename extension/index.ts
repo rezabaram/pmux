@@ -329,6 +329,16 @@ export default function (pi: ExtensionAPI) {
       extra += `\n\n## Your Role: ${myRoleName}\n${myRoleInstructions}`;
     }
 
+    // Inject workspace info
+    if (myId) {
+      const agent = await findById(mySession, myId);
+      if (agent?.workspace) {
+        const branchResult = await pi.exec("git", ["-C", agent.workspace, "branch", "--show-current"], { timeout: 5000 });
+        const branch = branchResult.stdout?.trim() || "unknown";
+        extra += `\n\n## Your Workspace\nPath: ${agent.workspace}\nBranch: ${branch}\nUse this as your working directory for all file operations.`;
+      }
+    }
+
     // Inject project context (CONTEXT.md)
     const projectCtx = readContextFile(projectArtifactsDir());
     if (projectCtx) {
@@ -1247,9 +1257,11 @@ export default function (pi: ExtensionAPI) {
           return handleLeave(ctx);
         case "manage":
           return handleManage(ctx);
+        case "workspace":
+          return handleWorkspace(ctx);
         default:
           ctx.ui.notify(
-            `Unknown: /pmux ${sub}\n\nAvailable:\n  /pmux join    Join or create a project\n  /pmux leave   Leave current project\n  /pmux manage  Manage projects and agents`,
+            `Unknown: /pmux ${sub}\n\nAvailable:\n  /pmux join       Join or create a project\n  /pmux leave   Leave current project\n  /pmux manage     Manage projects and agents\n  /pmux workspace  Git workspace setup and sync`,
             "warning"
           );
       }
@@ -1261,7 +1273,7 @@ export default function (pi: ExtensionAPI) {
   async function handleStatus(ctx: ExtensionContext): Promise<void> {
     if (!mySession || !myId) {
       ctx.ui.notify(
-        "Not in a project.\n\n  /pmux join    Join or create a project",
+        "Not in a project.\n\n  /pmux join       Join or create a project",
         "info"
       );
       return;
@@ -1276,7 +1288,7 @@ export default function (pi: ExtensionAPI) {
     });
 
     ctx.ui.notify(
-      `Project: ${mySession} | Agent: ${myName} (${myRoleName || "no role"})\n\nOnline:\n${agentLines.join("\n")}\n\n  /pmux join    Switch project or agent\n  /pmux leave   Leave project\n  /pmux manage  Manage projects and agents`,
+      `Project: ${mySession} | Agent: ${myName} (${myRoleName || "no role"})\n\nOnline:\n${agentLines.join("\n")}\n\n  /pmux join    Switch project or agent\n  /pmux leave   Leave project\n  /pmux manage     Manage projects and agents\n  /pmux workspace  Git workspace setup and sync`,
       "info"
     );
   }
@@ -1605,6 +1617,170 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+
+
+  // -- workspace handler --
+
+  async function handleWorkspace(ctx: ExtensionContext): Promise<void> {
+    const action = await ctx.ui.select("Workspace:", ["setup", "create", "sync", "status"]);
+    if (!action) return;
+
+    switch (action) {
+      case "setup": {
+        if (!mySession) { ctx.ui.notify("Join a project first with /pmux join.", "warning"); return; }
+
+        // Check if cwd is a git repo
+        const gitCheck = await pi.exec("git", ["rev-parse", "--show-toplevel"], { timeout: 5000 });
+        if (gitCheck.code !== 0) {
+          ctx.ui.notify("Current directory is not a git repository.", "warning");
+          return;
+        }
+
+        const repoPath = gitCheck.stdout.trim();
+        const config = await readSessionConfig(mySession);
+        config.mainRepo = repoPath;
+        await writeSessionConfig(mySession, config);
+
+        // Get current branch
+        const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 5000 });
+        const branch = branchResult.stdout.trim() || "main";
+
+        ctx.ui.notify(`Main repo set to: ${repoPath}\nBranch: ${branch}`, "info");
+        break;
+      }
+
+      case "create": {
+        if (!mySession || !myId || !myName) {
+          ctx.ui.notify("Join a project first with /pmux join.", "warning");
+          return;
+        }
+
+        const config = await readSessionConfig(mySession);
+        if (!config.mainRepo) {
+          ctx.ui.notify("No main repo configured. The architect should run /pmux workspace > setup first.", "warning");
+          return;
+        }
+
+        // Default worktree path: sibling of main repo
+        const { basename, dirname } = await import("node:path");
+        const repoName = basename(config.mainRepo);
+        const parentDir = dirname(config.mainRepo);
+        const defaultPath = `${parentDir}/${repoName}-${myName}`;
+
+        const worktreePath = await ctx.ui.input("Worktree path:", defaultPath);
+        if (!worktreePath) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+        // Create branch name
+        const branchName = `agent/${myName}`;
+
+        // Create worktree
+        const result = await pi.exec(
+          "git",
+          ["-C", config.mainRepo, "worktree", "add", worktreePath, "-b", branchName],
+          { timeout: 30000 }
+        );
+
+        if (result.code !== 0) {
+          // Branch might already exist, try without -b
+          const retry = await pi.exec(
+            "git",
+            ["-C", config.mainRepo, "worktree", "add", worktreePath, branchName],
+            { timeout: 30000 }
+          );
+          if (retry.code !== 0) {
+            ctx.ui.notify(`Failed to create worktree: ${retry.stderr}`, "error");
+            return;
+          }
+        }
+
+        // Store workspace path in agent record
+        await updateAgent(mySession, myId, { workspace: worktreePath });
+
+        ctx.ui.notify(
+          `Worktree created:\n  Path: ${worktreePath}\n  Branch: ${branchName}\n\nRestart Pi in that directory, or use absolute paths.`,
+          "info"
+        );
+        break;
+      }
+
+      case "sync": {
+        if (!mySession || !myId) {
+          ctx.ui.notify("Join a project first.", "warning");
+          return;
+        }
+
+        const agent = await findById(mySession, myId);
+        const workDir = agent?.workspace || ctx.cwd;
+
+        const config = await readSessionConfig(mySession);
+        if (!config.mainRepo) {
+          ctx.ui.notify("No main repo configured.", "warning");
+          return;
+        }
+
+        // Get main branch name
+        const mainBranch = await pi.exec(
+          "git", ["-C", config.mainRepo, "branch", "--show-current"],
+          { timeout: 5000 }
+        );
+        const mainBranchName = mainBranch.stdout.trim() || "main";
+
+        // Fetch and rebase
+        const fetch = await pi.exec("git", ["-C", workDir, "fetch", "origin"], { timeout: 30000 });
+        const rebase = await pi.exec("git", ["-C", workDir, "rebase", mainBranchName], { timeout: 30000 });
+
+        if (rebase.code !== 0) {
+          ctx.ui.notify(`Rebase conflicts:\n${rebase.stderr}\n\nResolve conflicts, then: git rebase --continue`, "warning");
+        } else {
+          ctx.ui.notify(`Synced with ${mainBranchName}. Up to date.`, "info");
+        }
+        break;
+      }
+
+      case "status": {
+        if (!mySession || !myId) {
+          ctx.ui.notify("Join a project first.", "warning");
+          return;
+        }
+
+        const agent = await findById(mySession, myId);
+        const workDir = agent?.workspace || ctx.cwd;
+
+        const branch = await pi.exec("git", ["-C", workDir, "branch", "--show-current"], { timeout: 5000 });
+        const status = await pi.exec("git", ["-C", workDir, "status", "--short"], { timeout: 5000 });
+
+        const config = await readSessionConfig(mySession);
+        const mainBranchName = config.mainRepo
+          ? (await pi.exec("git", ["-C", config.mainRepo, "branch", "--show-current"], { timeout: 5000 })).stdout.trim() || "main"
+          : "main";
+
+        const ahead = await pi.exec(
+          "git", ["-C", workDir, "rev-list", "--count", `${mainBranchName}..HEAD`],
+          { timeout: 5000 }
+        );
+        const behind = await pi.exec(
+          "git", ["-C", workDir, "rev-list", "--count", `HEAD..${mainBranchName}`],
+          { timeout: 5000 }
+        );
+
+        const dirtyFiles = status.stdout.trim();
+        const dirtyCount = dirtyFiles ? dirtyFiles.split("\n").length : 0;
+
+        let info = `Branch: ${branch.stdout.trim()}`;
+        info += `\nWorktree: ${workDir}`;
+        info += `\nAhead of ${mainBranchName}: ${ahead.stdout.trim()} commits`;
+        info += `\nBehind ${mainBranchName}: ${behind.stdout.trim()} commits`;
+        info += `\nDirty files: ${dirtyCount}`;
+
+        if (dirtyFiles) {
+          info += `\n\n${dirtyFiles}`;
+        }
+
+        ctx.ui.notify(info, "info");
+        break;
+      }
+    }
+  }
 
   // -- Helpers --------------------------------------------------
 
